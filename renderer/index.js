@@ -33,3 +33,7 @@ window.api.onActiveTab((tabId) => {
 settingsBtn.addEventListener('click', () => {
   window.api.openSetup();
 });
+
+document.getElementById('fill-login-btn').addEventListener('click', () => {
+  window.api.fillLogin();
+});
