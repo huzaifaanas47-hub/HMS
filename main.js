@@ -1,4 +1,4 @@
-const { app, BrowserWindow, BrowserView, ipcMain, Menu, session } = require('electron');
+const { app, BrowserWindow, BrowserView, ipcMain, Menu, session, safeStorage } = require('electron');
 const path = require('path');
 const Store = require('electron-store');
 
@@ -18,6 +18,46 @@ function saveConfig(tabs) {
   store.set('tabs', tabs);
 }
 
+// --- Credentials: password is OS-encrypted (Windows DPAPI via safeStorage) before saving to disk ---
+function saveCredentials(tabId, email, password) {
+  const record = { email: email || '' };
+  if (password) {
+    if (safeStorage.isEncryptionAvailable()) {
+      record.password = safeStorage.encryptString(password).toString('base64');
+      record.encrypted = true;
+    } else {
+      record.password = password; // fallback, unencrypted
+      record.encrypted = false;
+    }
+  } else {
+    // no new password provided: keep existing one if present
+    const existing = store.get(`creds.${tabId}`, null);
+    if (existing) {
+      record.password = existing.password;
+      record.encrypted = existing.encrypted;
+    }
+  }
+  store.set(`creds.${tabId}`, record);
+}
+
+function getCredentials(tabId) {
+  const record = store.get(`creds.${tabId}`, null);
+  if (!record) return { email: '', password: '' };
+  let password = '';
+  if (record.password) {
+    if (record.encrypted && safeStorage.isEncryptionAvailable()) {
+      try {
+        password = safeStorage.decryptString(Buffer.from(record.password, 'base64'));
+      } catch (e) {
+        password = '';
+      }
+    } else {
+      password = record.password;
+    }
+  }
+  return { email: record.email || '', password };
+}
+
 function defaultTabs() {
   const arr = [];
   for (let i = 1; i <= 7; i++) {
@@ -30,6 +70,7 @@ function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
+    icon: path.join(__dirname, 'build', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -68,6 +109,12 @@ function buildMenu() {
             if (currentTab && views[currentTab]) views[currentTab].webContents.reload();
           }
         },
+        {
+          label: 'Fill Saved Login',
+          click: () => {
+            if (currentTab && views[currentTab]) autofillCredentials(views[currentTab], currentTab);
+          }
+        },
         { type: 'separator' },
         { role: 'quit' }
       ]
@@ -93,10 +140,65 @@ function createViewForTab(tab) {
       nodeIntegration: false
     }
   });
+
+  view.webContents.on('did-finish-load', () => {
+    autofillCredentials(view, tab.id);
+  });
+
   if (tab.url) {
     view.webContents.loadURL(tab.url);
   }
   return view;
+}
+
+// Best-effort autofill: finds common email/username + password fields and fills them.
+// Does NOT auto-submit — user reviews and clicks login themselves.
+function autofillCredentials(view, tabId) {
+  const creds = getCredentials(tabId);
+  if (!creds.email && !creds.password) return;
+
+  const script = `
+    (function() {
+      try {
+        const emailVal = ${JSON.stringify(creds.email)};
+        const passVal = ${JSON.stringify(creds.password)};
+
+        function setVal(el, val) {
+          if (!el || !val) return;
+          const proto = Object.getPrototypeOf(el);
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+          setter.call(el, val);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        const emailSelectors = [
+          'input[type="email"]',
+          'input[name*="email" i]',
+          'input[id*="email" i]',
+          'input[name*="user" i]',
+          'input[id*="user" i]',
+          'input[name*="login" i]',
+          'input[id*="login" i]'
+        ];
+        const passSelectors = ['input[type="password"]'];
+
+        let emailEl = null;
+        for (const sel of emailSelectors) {
+          emailEl = document.querySelector(sel);
+          if (emailEl) break;
+        }
+        let passEl = document.querySelector(passSelectors[0]);
+
+        setVal(emailEl, emailVal);
+        setVal(passEl, passVal);
+      } catch (e) { /* silent */ }
+    })();
+  `;
+  // small delay so dynamically-rendered login forms exist before we try
+  setTimeout(() => {
+    view.webContents.executeJavaScript(script).catch(() => {});
+  }, 700);
 }
 
 function ensureView(tab) {
@@ -140,13 +242,26 @@ ipcMain.on('switch-tab', (e, tabId) => switchTab(tabId));
 ipcMain.on('open-setup', () => openSetupWindow(true));
 
 ipcMain.handle('get-tabs-for-setup', () => {
-  return getConfig() || defaultTabs();
+  const tabs = getConfig() || defaultTabs();
+  // attach current saved email (never send password back to the UI for security)
+  return tabs.map(t => {
+    const creds = getCredentials(t.id);
+    return { ...t, email: creds.email, hasPassword: !!creds.password };
+  });
 });
 
 ipcMain.on('save-tabs', (e, tabs) => {
-  saveConfig(tabs);
+  const cleanTabs = tabs.map(({ id, label, url }) => ({ id, label, url }));
+  saveConfig(cleanTabs);
+
+  tabs.forEach(t => {
+    if (t.email || t.password) {
+      saveCredentials(t.id, t.email, t.password);
+    }
+  });
+
   // rebuild views: remove views whose URL changed, keep others
-  for (const tab of tabs) {
+  for (const tab of cleanTabs) {
     const existing = views[tab.id];
     if (existing) {
       const loadedUrl = existing.webContents.getURL();
@@ -156,8 +271,8 @@ ipcMain.on('save-tabs', (e, tabs) => {
     }
   }
   if (mainWindow) {
-    mainWindow.webContents.send('load-tabs', tabs);
-    if (!currentTab && tabs.length) switchTab(tabs[0].id, tabs);
+    mainWindow.webContents.send('load-tabs', cleanTabs);
+    if (!currentTab && cleanTabs.length) switchTab(cleanTabs[0].id, cleanTabs);
   }
   if (setupWindow) setupWindow.close();
 });
@@ -171,6 +286,7 @@ function openSetupWindow(isEdit) {
   setupWindow = new BrowserWindow({
     width: 640,
     height: 720,
+    icon: path.join(__dirname, 'build', 'icon.ico'),
     parent: isEdit ? mainWindow : undefined,
     modal: false,
     webPreferences: {
