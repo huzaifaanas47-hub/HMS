@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Setup — Multi-Role Portal</title>
+<title>HMS</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -34,8 +34,8 @@
     color: #fff;
     font-size: 13px;
   }
-  .row input.label-input { flex: 0 0 120px; }
-  .row input.url-input { flex: 1 1 100%; }
+  .row input.label-input { flex: 0 0 105px; }
+  .row input.url-input { flex: 1 1 calc(100% - 145px); }
   .row input.email-input, .row input.pass-input { flex: 1 1 45%; }
   .field-hint { flex: 0 0 100%; font-size: 10px; color: #565d6e; margin-top: -4px; }
   button#save {
@@ -50,6 +50,29 @@
     width: 100%;
   }
   button#save:hover { background: #2559cf; }
+  button#add-tab {
+    margin-top: 6px;
+    background: transparent;
+    color: #7fa9ff;
+    border: 1px dashed #33507f;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    width: 100%;
+  }
+  button#add-tab:hover { background: #182238; }
+  .remove-btn {
+    flex: 0 0 28px;
+    background: #3a2430;
+    color: #ff8f8f;
+    border: none;
+    border-radius: 6px;
+    height: 34px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .remove-btn:hover { background: #4a2a35; }
   .hint { font-size: 11px; color: #6b7284; margin-top: 24px; line-height: 1.5; }
 </style>
 </head>
@@ -57,6 +80,7 @@
   <h1>Configure Your Role Tabs</h1>
   <p class="sub">Give each tab a custom name and login URL. Optionally save the email/username and password for that role — it will be auto-filled into the login form (never auto-submitted, so you can review before logging in). Leave password blank to keep it unchanged.</p>
   <div id="rows"></div>
+  <button id="add-tab">+ Add Another Tab</button>
   <button id="save">Save & Continue</button>
   <div class="hint">You can change these later from the main window menu: File → Edit Tab URLs.</div>
   <script src="setup.js"></script>
