@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Multi-Role Portal</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, Segoe UI, Arial, sans-serif; background: #1e2430; }
+  #tabbar {
+    height: 46px;
+    display: flex;
+    align-items: stretch;
+    background: #161b24;
+    border-bottom: 1px solid #2a3140;
+    overflow-x: auto;
+  }
+  #tabs { display: flex; }
+  .tab-btn {
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    color: #b7c0d0;
+    cursor: pointer;
+    font-size: 13px;
+    border-right: 1px solid #2a3140;
+    white-space: nowrap;
+  }
+  .tab-btn:hover { background: #202737; }
+  .tab-btn.active { background: #2e6bf2; color: #fff; }
+  #settings-btn {
+    margin-left: auto;
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    color: #8b93a5;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  #settings-btn:hover { color: #fff; }
+</style>
+</head>
+<body>
+  <div id="tabbar">
+    <div id="tabs"></div>
+    <div id="settings-btn">⚙ Edit URLs</div>
+  </div>
+  <script src="index.js"></script>
+</body>
+</html>
