@@ -61,7 +61,7 @@ function getCredentials(tabId) {
 function defaultTabs() {
   const arr = [];
   for (let i = 1; i <= 7; i++) {
-    arr.push({ id: `role${i}`, label: `Role ${i}`, url: '' });
+    arr.push({ id: `role${i}`, label: `Role ${i}`, url: 'https://medicglobe.fun' });
   }
   return arr;
 }
@@ -241,6 +241,10 @@ ipcMain.on('switch-tab', (e, tabId) => switchTab(tabId));
 
 ipcMain.on('open-setup', () => openSetupWindow(true));
 
+ipcMain.on('fill-login', () => {
+  if (currentTab && views[currentTab]) autofillCredentials(views[currentTab], currentTab);
+});
+
 ipcMain.handle('get-tabs-for-setup', () => {
   const tabs = getConfig() || defaultTabs();
   // attach current saved email (never send password back to the UI for security)
@@ -257,6 +261,18 @@ ipcMain.on('save-tabs', (e, tabs) => {
   tabs.forEach(t => {
     if (t.email || t.password) {
       saveCredentials(t.id, t.email, t.password);
+    }
+  });
+
+  const keepIds = new Set(cleanTabs.map(t => t.id));
+  Object.keys(views).forEach(id => {
+    if (!keepIds.has(id)) {
+      if (currentTab === id) {
+        mainWindow && mainWindow.removeBrowserView(views[id]);
+        currentTab = null;
+      }
+      views[id].webContents.close();
+      delete views[id];
     }
   });
 
