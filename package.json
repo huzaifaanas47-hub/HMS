@@ -1,10 +1,10 @@
 {
-  "name": "multirole-portal",
-  "productName": "Multi-Role Portal",
+  "name": "HMS",
+  "productName": "HMS",
   "version": "1.0.0",
-  "description": "Desktop app with isolated tabs for multiple role logins",
+  "description": "Desktop app For Hospital Managmanet System",
   "main": "main.js",
-  "author": "Talha",
+  "author": "Dr.Talha",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
