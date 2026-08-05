@@ -19,8 +19,8 @@
     "electron-store": "^8.2.0"
   },
   "build": {
-    "appId": "com.talha.multiroleportal",
-    "productName": "Multi-Role Portal",
+    "appId": "com.talha.HMS",
+    "productName": "HMS",
     "files": [
       "main.js",
       "preload.js",
