@@ -80,7 +80,15 @@ function createMainWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
-  mainWindow.on('resize', () => resizeCurrentView());
+  ['resize', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen', 'restore', 'show'].forEach(evt => {
+    mainWindow.on(evt, () => {
+      resizeCurrentView();
+      // window size can settle a moment after the event on Windows (DPI scaling / maximize animation)
+      setTimeout(resizeCurrentView, 50);
+    });
+  });
+  mainWindow.on('resized', () => resizeCurrentView());
+  mainWindow.maximize();
 
   buildMenu();
 
@@ -210,9 +218,15 @@ function ensureView(tab) {
 
 function resizeCurrentView() {
   if (!currentTab || !views[currentTab] || !mainWindow) return;
-  const [w, h] = mainWindow.getContentSize();
-  views[currentTab].setBounds({ x: 0, y: TAB_BAR_HEIGHT, width: w, height: h - TAB_BAR_HEIGHT });
-  views[currentTab].setAutoResize({ width: true, height: true });
+  const { width, height } = mainWindow.getContentBounds();
+  // Manual bounds only. Do NOT use setAutoResize here: it adds its own resize delta on top of
+  // setBounds, which made the view larger than the window (content cut off right/bottom).
+  views[currentTab].setBounds({
+    x: 0,
+    y: TAB_BAR_HEIGHT,
+    width: Math.max(0, width),
+    height: Math.max(0, height - TAB_BAR_HEIGHT)
+  });
 }
 
 function switchTab(tabId, tabsOverride) {
@@ -229,6 +243,7 @@ function switchTab(tabId, tabsOverride) {
   mainWindow.addBrowserView(view);
   currentTab = tabId;
   resizeCurrentView();
+  setTimeout(resizeCurrentView, 50);
 
   if (!view.webContents.getURL() && tab.url) {
     view.webContents.loadURL(tab.url);
