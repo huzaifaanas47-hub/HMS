@@ -72,7 +72,7 @@ page_header('Downloads', 'releases.php');
       <?php foreach (HMS_PLATFORMS as $k => $p): ?><option value="<?= h($k) ?>"><?= h($p['label']) ?> (.<?= h($p['ext']) ?>)</option><?php endforeach; ?></select></div>
     <div><label>Version</label><input type="text" name="version" placeholder="2.0.0" maxlength="20" required></div>
   </div>
-  <label>Installer file (HMS-Setup-….exe, or the .dmg: <b>arm64</b> = Apple chip, <b>x64</b> = Intel)</label><input type="file" name="file" required>
+  <label>Installer file (.exe for Windows, .dmg for Mac: <b>arm64</b> = Apple chip, <b>x64</b> = Intel, .apk for Android)</label><input type="file" name="file" required>
   <label>What changed (optional, shown to users)</label><input type="text" name="notes" maxlength="500">
   <div class="row"><button class="btn">Upload</button></div>
   <p class="muted">Server upload limit: <b><?= $limit === PHP_INT_MAX ? 'none' : h(fmt_size($limit)) ?></b>. An installer is about 80 to 120 MB. If this is too small, set <code>upload_max_filesize</code> and <code>post_max_size</code> to 300M in php.ini, and on nginx add <code>client_max_body_size 300m;</code>, then restart PHP and the web server.</p>
@@ -87,7 +87,7 @@ page_header('Downloads', 'releases.php');
   <td><?= h($r['version']) ?></td>
   <td><?= h(fmt_local($r['created_at'])) ?></td>
   <td><?= (int)$r['downloads'] ?></td>
-  <td><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="delete"><button class="btn red" name="id" value="<?= (int)$r['id'] ?>" onclick="return confirm('Delete this file from the server?')">Delete</button></form></td>
+  <td><form method="post"><?= csrf_field() ?><input type="hidden" name="action" value="delete"><button class="btn red" name="id" value="<?= (int)$r['id'] ?>" data-confirm="Delete this file from the server?">Delete</button></form></td>
 </tr>
 <?php endforeach; if (!$rows): ?><tr><td colspan="6" class="muted">Nothing uploaded yet.</td></tr><?php endif; ?>
 </table>

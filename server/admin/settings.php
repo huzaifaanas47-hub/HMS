@@ -22,6 +22,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $gexp = parse_local_input($_POST['global_expires_at'] ?? '');
     if ($url === null) { flash('That default site URL is not valid.', 'err'); redirect('settings.php'); }
     if (trim((string)($_POST['global_expires_at'] ?? '')) !== '' && $gexp === null) { flash('That global expiry date is not valid.', 'err'); redirect('settings.php'); }
+    setting_set('require_code', isset($_POST['require_code']) ? '1' : '0');
     setting_set('default_url', $url);
     setting_set('default_expiry_days', (string)max(0, min(3650, (int)($_POST['default_expiry_days'] ?? 0))));
     setting_set('global_expires_at', $gexp ?? '');
@@ -39,6 +40,8 @@ page_header('Settings', 'settings.php');
   <h2>Applies to every install</h2>
   <label>Default site URL - pushed to all installed apps (empty = keep whatever each user typed in the installer)</label>
   <input type="text" name="default_url" value="<?= h($s['default_url']) ?>" placeholder="https://yourhospital.com">
+  <label style="display:flex;gap:8px;align-items:flex-start;margin-top:14px"><input type="checkbox" name="require_code" value="1"<?= $s['require_code'] === '1' ? ' checked' : '' ?> style="margin-top:3px">
+    <span><b>Require an access code to join.</b> New apps must enter a code from <a href="codes.php">Codes</a> before they work. PCs already listed keep working; deleting a PC from the list revokes it. Turn this on once your users have the latest app.</span></label>
   <div class="grid">
     <div><label>New installs expire after N days (0 = never)</label><input type="number" name="default_expiry_days" min="0" max="3650" value="<?= h($s['default_expiry_days']) ?>"></div>
     <div><label>Global expiry (<?= h(cfg()['timezone'] ?? 'UTC') ?>) - ends access for EVERYONE at this moment</label><input type="datetime-local" name="global_expires_at" value="<?= h(input_local($s['global_expires_at'])) ?>"></div>

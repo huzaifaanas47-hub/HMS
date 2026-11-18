@@ -101,15 +101,15 @@ page_header('Clinic: ' . $c['name'], 'clinics.php');
     <button class="btn alt" name="days" value="7">+7 days</button><button class="btn alt" name="days" value="30">+30 days</button><button class="btn alt" name="days" value="90">+90 days</button><button class="btn alt" name="days" value="365">+1 year</button></form>
   <form method="post" class="row"><?= csrf_field() ?><input type="hidden" name="id" value="<?= $id ?>">
     <button class="btn alt" name="action" value="no_expiry">Remove expiry</button>
-    <button class="btn red" name="action" value="expire_now" onclick="return confirm('Lock every PC in this clinic now?')">Expire now</button>
-    <button class="btn red" name="action" value="delete" onclick="return confirm('Delete this clinic? Its PCs become unassigned.')">Delete clinic</button></form>
+    <button class="btn red" name="action" value="expire_now" data-confirm="Lock every PC in this clinic now?">Expire now</button>
+    <button class="btn red" name="action" value="delete" data-confirm="Delete this clinic? Its PCs become unassigned.">Delete clinic</button></form>
 </div>
 
 <h2>PCs in this clinic</h2>
 <?php if ($own): ?>
 <form method="post" class="msg" style="background:#fff1d6;color:#92600a"><?= csrf_field() ?><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="action" value="clear_overrides">
   <?= $own ?> PC(s) have their own expiry or URL that overrides the clinic (the earliest expiry always wins).
-  <button class="btn alt" style="margin-left:8px" onclick="return confirm('Clear the individual expiry and URL of every PC in this clinic?')">Make them all follow the clinic</button></form>
+  <button class="btn alt" style="margin-left:8px" data-confirm="Clear the individual expiry and URL of every PC in this clinic?">Make them all follow the clinic</button></form>
 <?php endif; ?>
 <table>
 <tr><th>PC</th><th>Last seen</th><th>Access until</th><th>Site URL pushed</th><th></th></tr>

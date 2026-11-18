@@ -22,6 +22,10 @@
   #lock .card { max-width: 440px; }
   #lock h1 { font-size: 22px; margin: 0 0 10px; }
   #lock p { color: #9aa3b5; font-size: 14px; line-height: 1.5; margin: 0 0 8px; }
+  #enroll-form { display: none; margin-top: 16px; }
+  #enroll-form.show { display: block; }
+  #enroll-code { width: 100%; padding: 12px; font-size: 22px; letter-spacing: 4px; text-align: center; text-transform: uppercase; border-radius: 6px; border: 1px solid #3a4358; background: #161b24; color: #fff; }
+  #enroll-error { color: #ff9b9b; font-size: 13px; min-height: 18px; margin-top: 8px; }
   #lock button { margin-top: 14px; background: #2e6bf2; color: #fff; border: 0; border-radius: 6px; padding: 10px 18px; font-size: 14px; cursor: pointer; }
 </style>
 </head>
@@ -38,6 +42,11 @@
       <h1 id="lock-title">Access unavailable</h1>
       <p id="lock-text"></p>
       <p id="lock-msg"></p>
+      <form id="enroll-form" autocomplete="off">
+        <input id="enroll-code" maxlength="12" placeholder="XXXX-XXXX" spellcheck="false" autocapitalize="characters">
+        <div id="enroll-error" role="alert"></div>
+        <button id="enroll-btn" type="submit">Join</button>
+      </form>
       <button id="recheck">Check again</button>
     </div>
   </div>

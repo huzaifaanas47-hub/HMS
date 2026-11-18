@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, WebContentsView, ipcMain, Menu, session, shell, dialog } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, Menu, session, shell, dialog, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { fileURLToPath } = require('url');
@@ -156,7 +156,8 @@ function guardContents(contents) {
   contents.on('did-create-window', (win) => guardContents(win.webContents));
 }
 
-const ALLOWED_PERMISSIONS = new Set(['fullscreen', 'clipboard-sanitized-write', 'notifications', 'media']);
+// What the HMS site may use (only on the configured site origins): camera + microphone ('media'), location, notifications, clipboard, fullscreen.
+const ALLOWED_PERMISSIONS = new Set(['fullscreen', 'clipboard-sanitized-write', 'clipboard-read', 'notifications', 'media', 'geolocation']);
 
 function hardenSession(ses, partition) {
   if (hardenedSessions.has(partition)) return;
@@ -357,6 +358,7 @@ function applyPolicy(eff) {
   } else if (wasLocked) {
     const tabs = getTabs() || [];
     if (tabs.length) switchTab(currentTab && tabs.some(t => t.id === currentTab) ? currentTab : tabs[0].id);
+    else openSetupWindow(false); // just joined with an access code: choose the tabs
   } else {
     syncViews();
   }
@@ -474,6 +476,11 @@ onMain('fill-login', () => { if (currentTab && views[currentTab]) autofillCreden
 onMain('logout-tab', (tabId) => { if (typeof tabId === 'string') confirmLogout(tabId); });
 onMain('logout-all', () => confirmLogout(null));
 onMain('recheck-policy', () => { if (policy) policy.check(); });
+ipcMain.handle('enroll', async (event, code) => {
+  if (!fromWindow(event, mainWindow)) throw new Error('Untrusted sender');
+  if (!policy || typeof code !== 'string' || !code.trim() || code.length > 40) return { ok: false, error: 'Enter the code your administrator gave you.' };
+  return policy.enroll(code);
+});
 onMain('tab-menu', (tabId) => {
   if (typeof tabId !== 'string' || !(getTabs() || []).some(t => t.id === tabId)) return;
   Menu.buildFromTemplate([
@@ -556,9 +563,14 @@ app.whenReady().then(async () => {
     locked = policy.evaluate().state !== 'ok';
   }
 
-  if (!getTabs()) openSetupWindow(false);
-  else createMainWindow();
+  if (!getTabs() && !locked) openSetupWindow(false);
+  else createMainWindow(); // locked (e.g. waiting for an access code): the lock screen is shown first
   policy.start();
+
+  // macOS asks for camera/microphone access once; Windows uses its own privacy settings.
+  if (process.platform === 'darwin') {
+    ['camera', 'microphone'].forEach(t => systemPreferences.askForMediaAccess(t).catch(() => {}));
+  }
 
   if (removed > 0) {
     dialog.showMessageBox({

@@ -64,7 +64,11 @@
           ]
         }
       ],
-      "artifactName": "HMS-${version}-mac-${arch}.${ext}"
+      "artifactName": "HMS-${version}-mac-${arch}.${ext}",
+      "extendInfo": {
+        "NSCameraUsageDescription": "HMS pages use the camera, for example to scan or take photos.",
+        "NSMicrophoneUsageDescription": "HMS pages use the microphone, for example for calls and voice notes."
+      }
     },
     "dmg": {
       "title": "HMS ${version}"

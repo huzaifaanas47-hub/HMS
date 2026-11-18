@@ -51,3 +51,64 @@ jobs:
         with:
           name: HMS-Installer-Mac
           path: dist/*.dmg
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      # An APK must be signed to install, and an update only installs over an older version signed with the SAME key.
+      # Add the four ANDROID_* repository secrets (see README) to keep one key for ever; without them a fresh key is made per build.
+      - name: Prepare signing key
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KS_KEYPASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            PASS="$KS_PASS"; ALIAS="$KS_ALIAS"; KEYPASS="${KS_KEYPASS:-$KS_PASS}"
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: signing with a temporary key. Updates will not install over a previous build."
+            PASS=$(openssl rand -hex 12); ALIAS=hms; KEYPASS="$PASS"
+            keytool -genkeypair -keystore "$RUNNER_TEMP/release.keystore" -storepass "$PASS" -keypass "$KEYPASS" \
+              -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=HMS"
+          fi
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PASSWORD=$PASS" >> "$GITHUB_ENV"
+          echo "KEY_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+          echo "KEY_PASSWORD=$KEYPASS" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        working-directory: android
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Name the APK
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          mkdir -p dist-android
+          cp android/app/build/outputs/apk/release/*.apk "dist-android/HMS-$VER-android.apk"
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HMS-Installer-Android
+          path: dist-android/*.apk

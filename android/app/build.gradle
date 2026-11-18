@@ -1,0 +1,50 @@
+import groovy.json.JsonSlurper
+
+plugins {
+    id 'com.android.application'
+}
+
+// One source of truth: the same app-config.json and package.json the desktop app uses.
+def cfg = new JsonSlurper().parse(file('../../app-config.json'))
+def pkg = new JsonSlurper().parse(file('../../package.json'))
+
+android {
+    namespace 'com.talha.hms'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.talha.hms'
+        minSdk 24
+        targetSdk 34
+        versionCode (System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger()
+        versionName pkg.version
+        buildConfigField 'String', 'POLICY_URL', "\"${cfg.policyUrl ?: ''}\""
+        buildConfigField 'String', 'PUBLIC_KEY', "\"${cfg.publicKey ?: ''}\""
+        buildConfigField 'String', 'DEFAULT_URL', "\"${cfg.defaultUrl ?: ''}\""
+    }
+
+    buildFeatures { buildConfig true }
+
+    signingConfigs {
+        release {
+            if (System.getenv('KEYSTORE_FILE')) {
+                storeFile file(System.getenv('KEYSTORE_FILE'))
+                storePassword System.getenv('KEYSTORE_PASSWORD')
+                keyAlias System.getenv('KEY_ALIAS')
+                keyPassword System.getenv('KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig(System.getenv('KEYSTORE_FILE') ? signingConfigs.release : signingConfigs.debug)
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

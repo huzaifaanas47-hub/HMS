@@ -30,11 +30,11 @@ function db(): PDO {
     return $pdo;
 }
 
-/* Upgrades an existing database in place (v2: clinics, v3: downloads). Runs once, then costs one tiny query per request. */
+/* Upgrades an existing database in place (v2: clinics, v3: downloads, v4: access codes). Runs once, then costs one tiny query per request. */
 function ensure_schema(PDO $pdo): void {
     try { $v = $pdo->query("SELECT v FROM settings WHERE k = 'schema_version'")->fetchColumn(); }
     catch (Throwable $e) { return; } // not installed yet
-    if ($v === '3') return;
+    if ($v === '4') return;
     $opts = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
     $pdo->exec("CREATE TABLE IF NOT EXISTS clinics (
         id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL UNIQUE, url VARCHAR(2048) NULL,
@@ -48,7 +48,14 @@ function ensure_schema(PDO $pdo): void {
         stored VARCHAR(80) NOT NULL, filename VARCHAR(160) NOT NULL, size BIGINT NOT NULL, sha256 CHAR(64) NOT NULL,
         notes VARCHAR(500) NULL, downloads INT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL, KEY idx_platform (platform, id)
     ) $opts");
-    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema_version', '3') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
+    $pdo->exec("CREATE TABLE IF NOT EXISTS enroll_codes (
+        id INT AUTO_INCREMENT PRIMARY KEY, code CHAR(8) NOT NULL UNIQUE, clinic_id INT NOT NULL, note VARCHAR(120) NULL,
+        max_uses INT NOT NULL DEFAULT 1, expires_at DATETIME NULL, is_open TINYINT(1) NOT NULL DEFAULT 1, created_at DATETIME NOT NULL, KEY idx_clinic (clinic_id)
+    ) $opts");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS enroll_attempts (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(45) NOT NULL, at DATETIME NOT NULL, KEY idx_ip (ip, at)) $opts");
+    $has = (int)$pdo->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'installs' AND COLUMN_NAME = 'code_id'")->fetchColumn();
+    if (!$has) $pdo->exec('ALTER TABLE installs ADD COLUMN code_id INT NULL, ADD KEY idx_code (code_id)');
+    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema_version', '4') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
 }
 
 function h($v): string { return htmlspecialchars((string)$v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
@@ -68,7 +75,7 @@ function clip($v, int $max): string {
 function settings(): array {
     static $s = null;
     if ($s === null) {
-        $s = ['default_url' => '', 'default_expiry_days' => '0', 'global_expires_at' => '', 'global_message' => '', 'offline_grace_days' => '14'];
+        $s = ['default_url' => '', 'default_expiry_days' => '0', 'global_expires_at' => '', 'global_message' => '', 'offline_grace_days' => '14', 'require_code' => '0'];
         foreach (db()->query('SELECT k, v FROM settings') as $r) $s[$r['k']] = (string)$r['v'];
     }
     return $s;
@@ -136,10 +143,34 @@ function clinics_all(bool $fresh = false): array { // id => row
 
 function clinic_get($id): ?array { return $id ? (clinics_all()[(int)$id] ?? null) : null; }
 
+/* -------------------------------------------------------------- access codes */
+
+const HMS_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no I, L, O, 0, 1: easy to read out loud
+
+function code_generate(): string {
+    $c = '';
+    for ($i = 0; $i < 8; $i++) $c .= HMS_CODE_ALPHABET[random_int(0, strlen(HMS_CODE_ALPHABET) - 1)];
+    return $c;
+}
+
+function code_normalize($v): string { return is_string($v) ? strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $v) ?? '') : ''; }
+function code_pretty(string $c): string { return substr($c, 0, 4) . '-' . substr($c, 4); }
+
+function code_get($id): ?array {
+    if (!$id) return null;
+    static $cache = [];
+    if (!array_key_exists((int)$id, $cache)) {
+        $st = db()->prepare('SELECT * FROM enroll_codes WHERE id = ?');
+        $st->execute([(int)$id]);
+        $cache[(int)$id] = $st->fetch() ?: null;
+    }
+    return $cache[(int)$id];
+}
+
 /* ------------------------------------------------------------------ policy */
 /* Precedence for a PC that belongs to a clinic:
    site URL : the PC's own override > the clinic's URL > the global default
-   expiry   : the EARLIEST of the PC's own date, the clinic's date and the global date
+   expiry   : the EARLIEST of the PC's own date, the access code's date, the clinic's date and the global date
    blocked  : if the PC or its clinic is blocked
    message  : the PC's > the clinic's > the global one */
 
@@ -147,6 +178,7 @@ function effective_expiry(array $inst): ?int {
     $c = [];
     if (!empty($inst['expires_at'])) $c[] = utc_ts($inst['expires_at']);
     if ($cl = clinic_get($inst['clinic_id'] ?? null)) { if (!empty($cl['expires_at'])) $c[] = utc_ts($cl['expires_at']); }
+    if ($co = code_get($inst['code_id'] ?? null)) { if (!empty($co['expires_at'])) $c[] = utc_ts($co['expires_at']); }
     $g = settings()['global_expires_at'];
     if ($g !== '') $c[] = utc_ts($g);
     $c = array_filter($c, fn($x) => $x !== null);
@@ -184,6 +216,17 @@ function build_policy(array $inst, string $nonce): array {
     ];
 }
 
+/* Sent to a device that has not joined with an access code yet (only when "require access code" is on).
+   Old app versions only understand status 'blocked', so they get locked with a readable message. */
+function build_unenrolled_policy(string $installId, string $nonce): array {
+    return [
+        'v' => 1, 'installId' => $installId, 'nonce' => $nonce, 'status' => 'blocked', 'enrollRequired' => true,
+        'expiresAt' => null, 'baseUrl' => null,
+        'message' => 'An access code is required. If this app does not ask for one, install the latest HMS.',
+        'offlineGraceDays' => (int)settings()['offline_grace_days'], 'serverTime' => time() * 1000,
+    ];
+}
+
 function exp_tag(?int $e, int $now): string { // small HTML badge for an expiry timestamp
     if ($e === null) return '<span class="tag ok">no expiry</span>';
     $t = h(fmt_local(gmdate('Y-m-d H:i:s', $e)));
@@ -213,11 +256,13 @@ function policy_url(): string {
 
 /* -------------------------------------------------------------------- auth */
 
+function csp_nonce(): string { static $n = null; return $n ??= bin2hex(random_bytes(16)); }
+
 function send_security_headers(): void {
     header('X-Frame-Options: DENY');
     header('X-Content-Type-Options: nosniff');
     header('Referrer-Policy: no-referrer');
-    header("Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'");
+    header("Content-Security-Policy: default-src 'self'; script-src 'nonce-" . csp_nonce() . "'; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'");
     header('Cache-Control: no-store');
 }
 
@@ -266,7 +311,7 @@ function redirect(string $to): void { header('Location: ' . $to); exit; }
 /* ------------------------------------------------------------------ layout */
 
 function page_header(string $title, string $active = ''): void {
-    $nav = ['clinics.php' => 'Clinics', 'index.php' => 'PCs', 'releases.php' => 'Downloads', 'settings.php' => 'Settings'];
+    $nav = ['clinics.php' => 'Clinics', 'index.php' => 'Devices', 'codes.php' => 'Codes', 'releases.php' => 'Downloads', 'settings.php' => 'Settings'];
     echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
         . '<title>' . h($title) . ' - HMS Admin</title><style>
 *{box-sizing:border-box}body{margin:0;font:14px/1.45 -apple-system,Segoe UI,Arial,sans-serif;background:#f3f5f9;color:#1c2330}
@@ -291,7 +336,10 @@ code,.mono{font-family:Consolas,monospace;font-size:12px;background:#eef1f6;padd
     if ($f = flash()) echo '<div class="msg ' . ($f[1] === 'err' ? 'err' : 'ok') . '">' . h($f[0]) . '</div>';
 }
 
-function page_footer(): void { echo '</main></body></html>'; }
+function page_footer(): void {
+    // Confirmation prompts: buttons with data-confirm ask first (inline onclick is blocked by the CSP).
+    echo '</main><script nonce="' . csp_nonce() . '">document.addEventListener("click",function(e){var b=e.target.closest("[data-confirm]");if(b&&!confirm(b.getAttribute("data-confirm")))e.preventDefault();});</script></body></html>';
+}
 
 
 /* ---------------------------------------------------------------- downloads */
@@ -300,6 +348,7 @@ const HMS_PLATFORMS = [
     'windows'   => ['label' => 'Windows',            'ext' => 'exe'],
     'mac-arm64' => ['label' => 'Mac (Apple chip)',   'ext' => 'dmg'],
     'mac-x64'   => ['label' => 'Mac (Intel chip)',   'ext' => 'dmg'],
+    'android'   => ['label' => 'Android',            'ext' => 'apk'],
 ];
 
 function releases_dir(): string { return __DIR__ . '/releases'; }

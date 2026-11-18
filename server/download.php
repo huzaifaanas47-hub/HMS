@@ -5,8 +5,8 @@ require __DIR__ . '/lib/common.php';
 send_security_headers();
 
 $ua = (string)($_SERVER['HTTP_USER_AGENT'] ?? '');
-$os = preg_match('/iPhone|iPad|Android/i', $ua) ? 'mobile' : (preg_match('/Windows/i', $ua) ? 'windows' : (preg_match('/Macintosh|Mac OS X/i', $ua) ? 'mac' : 'other'));
-if (isset($_GET['os']) && in_array($_GET['os'], ['windows', 'mac'], true)) $os = $_GET['os'];
+$os = preg_match('/Android/i', $ua) ? 'android' : (preg_match('/iPhone|iPad/i', $ua) ? 'mobile' : (preg_match('/Windows/i', $ua) ? 'windows' : (preg_match('/Macintosh|Mac OS X/i', $ua) ? 'mac' : 'other')));
+if (isset($_GET['os']) && in_array($_GET['os'], ['windows', 'mac', 'android'], true)) $os = $_GET['os'];
 
 $rel = [];
 foreach (HMS_PLATFORMS as $k => $_) $rel[$k] = release_latest($k);
@@ -47,7 +47,17 @@ code{font:12px Consolas,Menlo,monospace;word-break:break-all;background:#e8efed;
 </style></head><body><main>
 <h1>Download HMS</h1>
 <?php if ($os === 'mobile'): ?>
-  <p class="lead">HMS installs on a Windows PC or a Mac. Open this page on your computer to download it.</p>
+  <p class="lead">HMS is not available for iPhone or iPad. Open this page on a Windows PC, a Mac or an Android phone.</p>
+<?php elseif ($os === 'android'): ?>
+  <p class="lead">You are on Android. Download the app, then open it and enter the access code from your administrator.</p>
+  <div class="panel"><?= dl_button($rel['android'], 'android', 'Android') ?></div>
+  <h2>Install on your phone</h2>
+  <ol>
+    <li>Open the downloaded file. If Android blocks it, tap Settings and allow your browser to install apps, then open the file again.</li>
+    <li>Tap Install, then Open.</li>
+    <li>Allow camera, microphone and location when HMS asks. The pages you use need them.</li>
+    <li>Type your access code. You only do this once.</li>
+  </ol>
 <?php elseif ($os === 'mac'): ?>
   <p class="lead">You are on a Mac. Pick the file that matches your Mac's chip.</p>
   <div class="panel">
@@ -59,7 +69,8 @@ code{font:12px Consolas,Menlo,monospace;word-break:break-all;background:#e8efed;
   <ol>
     <li>Open the downloaded file and drag HMS onto Applications.</li>
     <li>Open Applications, right-click HMS, choose Open, then click Open again. You only do this the first time.</li>
-    <li>Enter the server address your administrator gave you, then save.</li>
+    <li>Allow camera and microphone when your Mac asks. The pages you use need them.</li>
+    <li>Type your access code. You only do this once.</li>
   </ol>
 <?php elseif ($os === 'windows'): ?>
   <p class="lead">You are on Windows. This installs HMS for the PC you are using now.</p>
@@ -68,8 +79,8 @@ code{font:12px Consolas,Menlo,monospace;word-break:break-all;background:#e8efed;
   <ol>
     <li>Open the downloaded file. If Windows says "Windows protected your PC", click More info, then Run anyway.</li>
     <li>Choose the install folder and click Next.</li>
-    <li>Type the server address your administrator gave you.</li>
-    <li>Finish, then open HMS from the desktop shortcut.</li>
+    <li>Keep the server address shown, or type the one your administrator gave you, then finish.</li>
+    <li>Open HMS from the desktop shortcut and type your access code. You only do this once.</li>
   </ol>
 <?php else: ?>
   <p class="lead">Choose the download for your computer.</p>
@@ -77,12 +88,13 @@ code{font:12px Consolas,Menlo,monospace;word-break:break-all;background:#e8efed;
     <?= dl_button($rel['windows'], 'windows', 'Windows') ?>
     <?= dl_button($rel['mac-arm64'], 'mac-arm64', 'Mac with Apple chip') ?>
     <?= dl_button($rel['mac-x64'], 'mac-x64', 'Mac with Intel chip') ?>
+    <?= dl_button($rel['android'], 'android', 'Android') ?>
   </div>
 <?php endif; ?>
 
-<?php if (in_array($os, ['windows', 'mac'], true)): ?>
-<div class="others">Using a different computer?
-  <a href="?os=<?= $os === 'windows' ? 'mac' : 'windows' ?>"><?= $os === 'windows' ? 'Show the Mac downloads' : 'Show the Windows download' ?></a>
+<?php if (in_array($os, ['windows', 'mac', 'android'], true)): $names = ['windows' => 'Windows', 'mac' => 'Mac', 'android' => 'Android']; ?>
+<div class="others">Using a different device?
+  <?php foreach ($names as $k => $n): if ($k !== $os): ?><a href="?os=<?= $k ?>"><?= $e($n) ?></a>&nbsp; <?php endif; endforeach; ?>
 </div>
 <?php endif; ?>
 

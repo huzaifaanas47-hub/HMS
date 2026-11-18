@@ -23,6 +23,8 @@ $sql = 'SELECT * FROM installs';
 $args = [];
 $where = [];
 $fc = isset($_GET['clinic']) && $_GET['clinic'] !== '' ? (int)$_GET['clinic'] : null; // 0 = unassigned
+$fcode = (int)($_GET['code'] ?? 0);
+if ($fcode) { $where[] = 'code_id = ?'; $args[] = $fcode; }
 if ($fc === 0) $where[] = 'clinic_id IS NULL';
 elseif ($fc !== null) { $where[] = 'clinic_id = ?'; $args[] = $fc; }
 if ($q !== '') {
@@ -46,9 +48,9 @@ foreach (db()->query('SELECT * FROM installs') as $r) {
     elseif ($e !== null && $e <= $now + 7 * 86400) $stats['soon']++;
 }
 
-page_header('PCs', 'index.php');
+page_header('Devices', 'index.php');
 ?>
-<h1>All PCs</h1>
+<h1>All devices<?= $fcode && ($cc = code_get($fcode)) ? ' that joined with ' . h(code_pretty($cc['code'])) : '' ?></h1>
 <div class="cards">
   <div class="card"><b><?= $stats['total'] ?></b><span>Total installs</span></div>
   <div class="card"><b><?= $stats['online'] ?></b><span>Online now</span></div>

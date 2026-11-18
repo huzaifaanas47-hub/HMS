@@ -59,6 +59,7 @@ $e = effective_expiry($inst);
 <h1><?= h($inst['name'] ?: ($inst['device'] ?: 'Unnamed install')) ?></h1>
 <p class="muted"><a href="index.php">&larr; All installs</a> · Install ID <span class="mono"><?= h($inst['install_id']) ?></span></p>
 
+<?php if ($co = code_get($inst['code_id'] ?? null)): ?><p class="muted">Joined with access code <span class="mono"><?= h(code_pretty($co['code'])) ?></span>. Deleting this device frees its place on that code.</p><?php endif; ?>
 <div class="box"><div class="grid">
   <div><b>Device</b><br><?= h($inst['device'] ?: '—') ?> (<?= h($inst['platform']) ?> <?= h($inst['os_release']) ?>)</div>
   <div><b>App version</b><br><?= h($inst['app_version'] ?: '—') ?></div>
@@ -88,7 +89,7 @@ $e = effective_expiry($inst);
     <button class="btn alt" name="days" value="7">+7 days</button><button class="btn alt" name="days" value="30">+30 days</button><button class="btn alt" name="days" value="90">+90 days</button><button class="btn alt" name="days" value="365">+1 year</button></form>
   <form method="post" class="row"><?= csrf_field() ?><input type="hidden" name="id" value="<?= $id ?>">
     <button class="btn alt" name="action" value="no_expiry">Remove expiry</button>
-    <button class="btn red" name="action" value="expire_now" onclick="return confirm('Lock this install now?')">Expire now</button>
-    <button class="btn red" name="action" value="delete" onclick="return confirm('Remove this install record?')">Delete record</button></form>
+    <button class="btn red" name="action" value="expire_now" data-confirm="Lock this install now?">Expire now</button>
+    <button class="btn red" name="action" value="delete" data-confirm="Remove this install record?">Delete record</button></form>
 </div>
 <?php page_footer();

@@ -71,7 +71,7 @@ function createPolicy({ store, config, appVersion, onChange }) {
     return { p };
   }
 
-  // -> { state: 'ok'|'expired'|'blocked'|'stale', baseUrl, message, expiresAt, daysLeft }
+  // -> { state: 'ok'|'expired'|'blocked'|'stale'|'enroll', baseUrl, message, expiresAt, daysLeft }
   function evaluate() {
     const out = { state: 'ok', baseUrl: null, message: null, expiresAt: null, daysLeft: null };
     const c = loadCached();
@@ -83,7 +83,8 @@ function createPolicy({ store, config, appVersion, onChange }) {
     out.message = p.message || null;
     out.expiresAt = p.expiresAt || null;
     if (p.expiresAt) out.daysLeft = Math.ceil((p.expiresAt - t) / DAY);
-    if (p.status === 'blocked') out.state = 'blocked';
+    if (p.enrollRequired) out.state = 'enroll'; // the admin server wants an access code first
+    else if (p.status === 'blocked') out.state = 'blocked';
     else if (p.expiresAt && t >= p.expiresAt) out.state = 'expired';
     else if (p.offlineGraceDays > 0 && t - p.serverTime > p.offlineGraceDays * DAY) out.state = 'stale'; // serverTime is signed, so it cannot be edited locally
     return out;
@@ -130,6 +131,38 @@ function createPolicy({ store, config, appVersion, onChange }) {
     return publish();
   }
 
+  function enrollUrl() {
+    return config.policyUrl.replace(/checkin\.php(\?.*)?$/, 'enroll.php');
+  }
+
+  // Joins a clinic with the access code the administrator gave out. -> { ok, clinic } | { ok:false, error }
+  async function enroll(code) {
+    if (!active) return { ok: false, error: 'This app is not connected to an admin server.' };
+    const nonce = crypto.randomBytes(16).toString('hex');
+    try {
+      const res = await net.fetch(enrollUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          installId, nonce, code: String(code || ''), appVersion,
+          platform: process.platform, device: os.hostname(), osRelease: os.release()
+        }),
+        signal: AbortSignal.timeout(15000)
+      });
+      let body = null;
+      try { body = await res.json(); } catch (e) { /* not JSON */ }
+      if (!res.ok) return { ok: false, error: (body && body.error) || 'The server answered with an error (' + res.status + ').' };
+      const p = verifyEnvelope(body, key);
+      if (!p || p.installId !== installId || p.nonce !== nonce || p.enrolled !== true) {
+        return { ok: false, error: 'The answer could not be verified. Check that you are using the correct server.' };
+      }
+      await check();
+      return { ok: true, clinic: p.clinic };
+    } catch (e) {
+      return { ok: false, error: 'Cannot reach the server. Check your internet connection and try again.' };
+    }
+  }
+
   function start() {
     if (!active) return;
     check();
@@ -142,6 +175,7 @@ function createPolicy({ store, config, appVersion, onChange }) {
     installId,
     start,
     check,
+    enroll,
     evaluate,
     persist: () => persist(true),
     getLastError: () => lastError

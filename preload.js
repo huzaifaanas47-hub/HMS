@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   logoutAll: () => ipcRenderer.send('logout-all'),
   tabMenu: (tabId) => ipcRenderer.send('tab-menu', tabId),
   recheckPolicy: () => ipcRenderer.send('recheck-policy'),
+  enroll: (code) => ipcRenderer.invoke('enroll', code),
   onLoadTabs: (cb) => ipcRenderer.on('load-tabs', (e, tabs) => cb(tabs)),
   onActiveTab: (cb) => ipcRenderer.on('active-tab', (e, tabId) => cb(tabId)),
   onPolicyState: (cb) => ipcRenderer.on('policy-state', (e, state) => cb(state)),

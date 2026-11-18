@@ -25,6 +25,11 @@ $q = $pdo->prepare('SELECT * FROM installs WHERE install_id = ?');
 $q->execute([$installId]);
 $inst = $q->fetch();
 
+if (!$inst && settings()['require_code'] === '1') { // join with an access code first (api/enroll.php); nothing is registered yet
+    echo json_encode(sign_envelope(build_unenrolled_policy($installId, $nonce)), JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
 if (!$inst) { // first contact: register, applying the "new installs expire after N days" setting
     $days = (int)settings()['default_expiry_days'];
     $exp = $days > 0 ? gmdate('Y-m-d H:i:s', time() + $days * 86400) : null;
