@@ -3,13 +3,19 @@ declare(strict_types=1);
 require __DIR__ . '/../lib/common.php';
 require_admin();
 
+// After a POST: normal form -> redirect; background upload (progress bar) -> small JSON answer, the message shows on the next page load.
+function finish(): void {
+    if (isset($_POST['ajax'])) { header('Content-Type: application/json'); echo '{"done":true}'; exit; }
+    redirect('releases.php');
+}
+
 $limit = min(ini_bytes('upload_max_filesize') ?: PHP_INT_MAX, ini_bytes('post_max_size') ?: PHP_INT_MAX);
 $dir = releases_dir();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($_POST) && empty($_FILES) && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
         flash('The file is larger than this server allows (' . fmt_size($limit) . '). See "Server upload limit" below.', 'err');
-        redirect('releases.php');
+        finish();
     }
     csrf_check();
     $act = (string)($_POST['action'] ?? 'upload');
@@ -21,7 +27,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             db()->prepare('DELETE FROM releases WHERE id = ?')->execute([$r['id']]);
             flash('Removed ' . $r['filename'] . '.');
         }
-        redirect('releases.php');
+        finish();
     }
     $platform = (string)($_POST['platform'] ?? '');
     $version = clip($_POST['version'] ?? '', 20);
@@ -47,7 +53,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             flash('Uploaded ' . $name . '. It is now the download for ' . HMS_PLATFORMS[$platform]['label'] . '.');
         }
     }
-    redirect('releases.php');
+    finish();
 }
 
 $rows = db()->query('SELECT * FROM releases ORDER BY id DESC LIMIT 200')->fetchAll();
@@ -65,7 +71,7 @@ page_header('Downloads', 'releases.php');
   <?php foreach (HMS_PLATFORMS as $k => $p): ?><span class="mono"><?= h(base_dir_url() . '/get.php?p=' . $k) ?></span> <?php endforeach; ?></p>
 </div>
 
-<form method="post" enctype="multipart/form-data" class="box"><?= csrf_field() ?><input type="hidden" name="action" value="upload">
+<form method="post" enctype="multipart/form-data" class="box" id="upload-form"><?= csrf_field() ?><input type="hidden" name="action" value="upload">
   <h2>Upload a new version</h2>
   <div class="grid">
     <div><label>For which computer</label><select name="platform">
@@ -74,7 +80,11 @@ page_header('Downloads', 'releases.php');
   </div>
   <label>Installer file (.exe for Windows, .dmg for Mac: <b>arm64</b> = Apple chip, <b>x64</b> = Intel, .apk for Android)</label><input type="file" name="file" required>
   <label>What changed (optional, shown to users)</label><input type="text" name="notes" maxlength="500">
-  <div class="row"><button class="btn">Upload</button></div>
+  <div class="row"><button class="btn" id="up-btn">Upload</button> <button type="button" class="btn alt" id="up-cancel" style="display:none">Cancel</button></div>
+  <div id="up-box" style="display:none;margin-top:12px">
+    <div style="background:#e4eae8;border-radius:8px;height:18px;overflow:hidden"><div id="up-bar" style="background:#2e6bf2;height:100%;width:0;transition:width .15s"></div></div>
+    <p id="up-text" class="muted" style="margin:6px 0 0"></p>
+  </div>
   <p class="muted">Server upload limit: <b><?= $limit === PHP_INT_MAX ? 'none' : h(fmt_size($limit)) ?></b>. An installer is about 80 to 120 MB. If this is too small, set <code>upload_max_filesize</code> and <code>post_max_size</code> to 300M in php.ini, and on nginx add <code>client_max_body_size 300m;</code>, then restart PHP and the web server.</p>
 </form>
 
@@ -91,4 +101,39 @@ page_header('Downloads', 'releases.php');
 </tr>
 <?php endforeach; if (!$rows): ?><tr><td colspan="6" class="muted">Nothing uploaded yet.</td></tr><?php endif; ?>
 </table>
+<script nonce="<?= csp_nonce() ?>">
+(function () {
+  var form = document.getElementById('upload-form'), btn = document.getElementById('up-btn'), cancel = document.getElementById('up-cancel');
+  var box = document.getElementById('up-box'), bar = document.getElementById('up-bar'), text = document.getElementById('up-text');
+  var xhr = null;
+  function mb(n) { return (n / 1048576).toFixed(1) + ' MB'; }
+  function reset(msg) { btn.disabled = false; btn.textContent = 'Upload'; cancel.style.display = 'none'; text.textContent = msg || ''; if (msg) text.style.color = '#b42318'; }
+  form.addEventListener('submit', function (e) {
+    var f = form.elements.file.files[0];
+    if (!f || !window.XMLHttpRequest || !window.FormData) return; // fall back to a normal upload
+    e.preventDefault();
+    box.style.display = 'block'; bar.style.width = '0'; text.style.color = ''; text.textContent = 'Starting...';
+    btn.disabled = true; btn.textContent = 'Uploading...'; cancel.style.display = '';
+    var t0 = Date.now();
+    xhr = new XMLHttpRequest();
+    xhr.open('POST', form.getAttribute('action') || location.href);
+    xhr.upload.onprogress = function (ev) {
+      if (!ev.lengthComputable) return;
+      var pct = Math.min(100, Math.round(ev.loaded / ev.total * 100)), secs = Math.max(1, (Date.now() - t0) / 1000);
+      bar.style.width = pct + '%';
+      text.textContent = pct + '%  (' + mb(ev.loaded) + ' of ' + mb(ev.total) + ', ' + mb(ev.loaded / secs) + '/s)' + (pct === 100 ? ' - saving on the server...' : '');
+    };
+    xhr.onload = function () {
+      if (xhr.status === 413) { reset('The server refused the file because it is too big. Raise client_max_body_size (nginx) and the PHP limits, see below.'); return; }
+      if (xhr.status >= 400) { reset('Upload failed (HTTP ' + xhr.status + ').'); return; }
+      bar.style.width = '100%';
+      location.href = 'releases.php'; // the result message is shown there
+    };
+    xhr.onerror = function () { reset('The upload was interrupted. Check your connection and try again.'); };
+    xhr.onabort = function () { bar.style.width = '0'; reset('Upload cancelled.'); text.style.color = ''; };
+    var fd = new FormData(form); fd.append('ajax', '1'); xhr.send(fd);
+  });
+  cancel.addEventListener('click', function () { if (xhr) xhr.abort(); });
+})();
+</script>
 <?php page_footer();
