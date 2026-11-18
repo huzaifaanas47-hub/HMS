@@ -97,6 +97,10 @@ unzip them), then in the admin panel open **Downloads**, choose the computer typ
 Give users one link: `https://YOUR-DOMAIN/hms-admin/download.php`. It shows the right installer for their computer with
 install steps; the newest upload per type is what they get. Nobody needs GitHub.
 
+Uploads are sent in small pieces and survive network drops: a lost connection pauses and retries by itself, and a closed tab or
+crashed browser can resume by choosing the same file again (unfinished uploads are kept for 3 days in `lib/releases/tmp/`).
+Downloads support resuming too (HTTP Range), so a phone that loses signal continues where it stopped.
+
 Installers are 80-120 MB. Raise `upload_max_filesize` and `post_max_size` (e.g. 300M) in php.ini, and on nginx add
 `client_max_body_size 300m;`. Files are stored in `lib/releases/` (blocked from direct web access; downloads go through `get.php`).
 
