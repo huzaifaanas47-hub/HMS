@@ -37,10 +37,11 @@ window.api.onPolicyState((s) => {
   const locked = s.state !== 'ok';
   lockEl.classList.toggle('show', locked);
   if (locked) {
-    const titles = { expired: 'Access has expired', blocked: 'Access has been disabled', stale: 'Verification required', enroll: 'Enter your access code' };
+    const titles = { expired: 'Access has expired', blocked: 'Access has been disabled', stale: 'Verification required', enroll: 'Enter your access code', unverified: 'Connecting to HMS' };
     const texts = {
       expired: s.expiresAt ? 'Your access to HMS ended on ' + new Date(s.expiresAt).toLocaleString() + '.' : 'Your access to HMS has ended.',
       blocked: 'The administrator has disabled access for this installation.',
+      unverified: 'HMS is checking with the server. If this stays here, connect to the internet and click Check again.',
       enroll: 'Your administrator gave you a code like ABCD-EFGH. You only need to enter it once.',
       stale: 'HMS has not been able to reach the administration server for too long. Connect to the internet and check again.'
     };

@@ -17,7 +17,7 @@ control it remotely: change the site URL, set an expiry time, block or message a
 |---|---|
 | `main.js`, `preload.js`, `renderer/`, `src/` | The Electron app |
 | `app-config.json` | `policyUrl` + `publicKey` of your admin server, fallback `defaultUrl` |
-| `build/installer.nsh` | Adds the **"HMS Server Address"** page to the Windows installer |
+| `build/installer.nsh` | Windows installer extra: optional `/URL=` for silent installs |
 | `server/` | The PHP admin panel + check-in API + public download page (deploy on your Oracle server) |
 | `.github/workflows/build.yml` | Builds the installer on GitHub (no Windows PC needed) |
 
@@ -50,8 +50,7 @@ Edit `app-config.json`:
 Push to GitHub → **Actions → Build Windows EXE → artifact `HMS-Installer`**.
 Or locally: `npm install && npm run build:win` (on Windows).
 
-The installer asks for the **HMS Server Address** after the folder page and stores it next to
-`HMS.exe`. Silent install: `HMS-Setup-2.0.0.exe /S /URL=https://hospital.example.com`.
+The installer no longer asks for an address: the site comes from the access code. A silent install can pin one: `HMS-Setup-2.0.0.exe /S /URL=https://hospital.example.com`.
 
 ### macOS
 

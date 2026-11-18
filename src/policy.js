@@ -71,11 +71,11 @@ function createPolicy({ store, config, appVersion, onChange }) {
     return { p };
   }
 
-  // -> { state: 'ok'|'expired'|'blocked'|'stale'|'enroll', baseUrl, message, expiresAt, daysLeft }
+  // -> { state: 'ok'|'expired'|'blocked'|'stale'|'enroll'|'unverified', baseUrl, message, expiresAt, daysLeft }
   function evaluate() {
     const out = { state: 'ok', baseUrl: null, message: null, expiresAt: null, daysLeft: null };
     const c = loadCached();
-    if (!c) return out;
+    if (!c) { if (active) out.state = 'unverified'; return out; } // first start: nothing is allowed until the server has answered
     if (c.invalid) { out.state = 'stale'; return out; }
     const p = c.p;
     const t = now();

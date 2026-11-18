@@ -77,8 +77,8 @@ ol{margin:0;padding-left:22px}li{margin:0 0 8px;padding-left:4px}li::marker{colo
   <ol>
     <li>Open the downloaded file. If Windows says "Windows protected your PC", click More info, then Run anyway.</li>
     <li>Choose the install folder and click Next.</li>
-    <li>Keep the server address shown, or type the one your administrator gave you, then finish.</li>
-    <li>Open HMS from the desktop shortcut and type your access code. You only do this once.</li>
+    <li>Finish, then open HMS from the desktop shortcut.</li>
+    <li>Type your access code. You only do this once.</li>
   </ol>
 <?php else: ?>
   <p class="lead">Choose the download for your computer.</p>

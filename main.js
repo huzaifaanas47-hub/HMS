@@ -559,7 +559,7 @@ app.whenReady().then(async () => {
   // A brand-new install has no policy yet: give the first check a moment so the admin's
   // default URL is used from the very first page load.
   if (policy.active && !store.get('policy')) {
-    await Promise.race([policy.check(), new Promise(r => setTimeout(r, 3000))]);
+    await Promise.race([policy.check(), new Promise(r => setTimeout(r, 8000))]);
     locked = policy.evaluate().state !== 'ok';
   }
 
