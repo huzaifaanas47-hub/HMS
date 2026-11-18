@@ -53,19 +53,27 @@ Or locally: `npm install && npm run build:win` (on Windows).
 The installer asks for the **HMS Server Address** after the folder page and stores it next to
 `HMS.exe`. Silent install: `HMS-Setup-2.0.0.exe /S /URL=https://hospital.example.com`.
 
-## 3. Controlling installs
+## 3. Controlling installs: clinics
 
-Every install appears under **Installs** after its first check-in, with device name, OS, app
-version, IP and last-seen time (green dot = checked in within 15 min).
+Every PC appears under **PCs** after its first check-in (device name, OS, app version, IP, last seen;
+green dot = checked in within 15 min). PCs are grouped into **Clinics** (a clinic or hospital = a batch of PCs,
+one per role or desk).
 
-* **Site URL**: *Settings → Default site URL* is pushed to every install (it overrides what was typed in the
-  installer); a per-install URL on the *Manage* page wins over it. Tabs set to a path (`/login`)
-  follow the pushed URL; tabs set to a full `https://...` address keep theirs.
-* **Expiry**: per install (date, +7/+30/+90 days, expire now, remove), *new installs expire after N days*,
-  or a **global expiry** that ends access for everyone at once.
-* **Block** an install, and show a **message** on its lock screen.
-* Changes reach an app at its next check-in (≤ 10 min, or on restart). When expired/blocked the
-  app destroys its site tabs and shows only a lock screen.
+1. **Clinics → New clinic**: give it a name, the **site URL** and an **expiry** for the whole batch.
+2. Install the app on the clinic's PCs. Each shows up under **PCs** (filter "Not in a clinic").
+3. Open the clinic and tick the new PCs under *Add PCs*, or tick them on the **PCs** page and use
+   *Move ticked PCs to this clinic*. Joining a clinic clears the PC's own expiry/URL so the clinic's apply.
+4. From then on, change the clinic once: **+7/+30/+90/+365 days**, remove expiry, expire now, block, set a lock-screen
+   message, or change the URL. Every PC in it follows at its next check-in (≤ 10 min, or on restart).
+
+Precedence for a PC in a clinic: site URL = PC's own override, else the clinic's, else *Settings → Default site URL*.
+Expiry = the **earliest** of the PC's own date, the clinic's date and the global expiry. Blocked if the PC or its clinic
+is blocked. A single PC can still get its own settings on its *Edit* page. Tabs set to a path (`/login`) follow the
+pushed URL; tabs set to a full `https://...` address keep theirs. When expired/blocked the app destroys its site tabs
+and shows only a lock screen.
+
+Upgrading the admin panel from the first 2.0 version: upload the new `server/` files over the old ones (keep `lib/config.php`).
+The database upgrades itself the first time you sign in.
 
 Only this is sent to the server: random install ID, PC name, OS version, app version, IP.
 No passwords, no page content, no browsing data. Tell your users.

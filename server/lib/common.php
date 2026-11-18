@@ -25,8 +25,24 @@ function db(): PDO {
             [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC, PDO::ATTR_EMULATE_PREPARES => false]
         );
         $pdo->exec("SET time_zone = '+00:00'");
+        ensure_schema($pdo);
     }
     return $pdo;
+}
+
+/* Upgrades an existing database in place (v2: clinics). Runs once, then costs one tiny query per request. */
+function ensure_schema(PDO $pdo): void {
+    try { $v = $pdo->query("SELECT v FROM settings WHERE k = 'schema_version'")->fetchColumn(); }
+    catch (Throwable $e) { return; } // not installed yet
+    if ($v === '2') return;
+    $pdo->exec("CREATE TABLE IF NOT EXISTS clinics (
+        id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL UNIQUE, url VARCHAR(2048) NULL,
+        status ENUM('active','blocked') NOT NULL DEFAULT 'active', expires_at DATETIME NULL,
+        message VARCHAR(500) NULL, notes TEXT NULL, created_at DATETIME NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $has = (int)$pdo->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'installs' AND COLUMN_NAME = 'clinic_id'")->fetchColumn();
+    if (!$has) $pdo->exec('ALTER TABLE installs ADD COLUMN clinic_id INT NULL, ADD KEY idx_clinic (clinic_id)');
+    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema_version', '2') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
 }
 
 function h($v): string { return htmlspecialchars((string)$v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
@@ -101,33 +117,72 @@ function normalize_url($v): ?string { // '' => '' (cleared); invalid => null
     return $v;
 }
 
+/* ------------------------------------------------------------------ clinics */
+
+function clinics_all(bool $fresh = false): array { // id => row
+    static $c = null;
+    if ($c === null || $fresh) {
+        $c = [];
+        foreach (db()->query('SELECT * FROM clinics ORDER BY name') as $r) $c[(int)$r['id']] = $r;
+    }
+    return $c;
+}
+
+function clinic_get($id): ?array { return $id ? (clinics_all()[(int)$id] ?? null) : null; }
+
 /* ------------------------------------------------------------------ policy */
+/* Precedence for a PC that belongs to a clinic:
+   site URL : the PC's own override > the clinic's URL > the global default
+   expiry   : the EARLIEST of the PC's own date, the clinic's date and the global date
+   blocked  : if the PC or its clinic is blocked
+   message  : the PC's > the clinic's > the global one */
 
 function effective_expiry(array $inst): ?int {
     $c = [];
     if (!empty($inst['expires_at'])) $c[] = utc_ts($inst['expires_at']);
+    if ($cl = clinic_get($inst['clinic_id'] ?? null)) { if (!empty($cl['expires_at'])) $c[] = utc_ts($cl['expires_at']); }
     $g = settings()['global_expires_at'];
     if ($g !== '') $c[] = utc_ts($g);
     $c = array_filter($c, fn($x) => $x !== null);
     return $c ? min($c) : null;
 }
 
+function effective_url(array $inst): string {
+    if (!empty($inst['url_override'])) return $inst['url_override'];
+    $cl = clinic_get($inst['clinic_id'] ?? null);
+    if ($cl && !empty($cl['url'])) return $cl['url'];
+    return settings()['default_url'];
+}
+
+function effective_status(array $inst): string {
+    $cl = clinic_get($inst['clinic_id'] ?? null);
+    return ($inst['status'] === 'blocked' || ($cl && $cl['status'] === 'blocked')) ? 'blocked' : 'active';
+}
+
 function build_policy(array $inst, string $nonce): array {
     $s = settings();
+    $cl = clinic_get($inst['clinic_id'] ?? null);
     $exp = effective_expiry($inst);
-    $base = $inst['url_override'] !== null && $inst['url_override'] !== '' ? $inst['url_override'] : ($s['default_url'] !== '' ? $s['default_url'] : null);
-    $msg = !empty($inst['message']) ? $inst['message'] : ($s['global_message'] !== '' ? $s['global_message'] : null);
+    $base = effective_url($inst);
+    $msg = !empty($inst['message']) ? $inst['message'] : (!empty($cl['message']) ? $cl['message'] : ($s['global_message'] !== '' ? $s['global_message'] : null));
     return [
         'v' => 1,
         'installId' => $inst['install_id'],
         'nonce' => $nonce,
-        'status' => $inst['status'],
+        'status' => effective_status($inst),
         'expiresAt' => $exp !== null ? $exp * 1000 : null,
-        'baseUrl' => $base,
+        'baseUrl' => $base !== '' ? $base : null,
         'message' => $msg,
         'offlineGraceDays' => (int)$s['offline_grace_days'],
         'serverTime' => time() * 1000,
     ];
+}
+
+function exp_tag(?int $e, int $now): string { // small HTML badge for an expiry timestamp
+    if ($e === null) return '<span class="tag ok">no expiry</span>';
+    $t = h(fmt_local(gmdate('Y-m-d H:i:s', $e)));
+    if ($e <= $now) return '<span class="tag bad">expired ' . $t . '</span>';
+    return '<span class="tag' . ($e <= $now + 7 * 86400 ? ' warn' : '') . '">' . $t . '</span>';
 }
 
 function secret_key(): string {
@@ -205,7 +260,7 @@ function redirect(string $to): void { header('Location: ' . $to); exit; }
 /* ------------------------------------------------------------------ layout */
 
 function page_header(string $title, string $active = ''): void {
-    $nav = ['index.php' => 'Installs', 'settings.php' => 'Settings'];
+    $nav = ['clinics.php' => 'Clinics', 'index.php' => 'PCs', 'settings.php' => 'Settings'];
     echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
         . '<title>' . h($title) . ' - HMS Admin</title><style>
 *{box-sizing:border-box}body{margin:0;font:14px/1.45 -apple-system,Segoe UI,Arial,sans-serif;background:#f3f5f9;color:#1c2330}

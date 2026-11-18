@@ -34,16 +34,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $exp = parse_local_input($_POST['expires_at'] ?? '');
         if ($url === null) { flash('That site URL is not valid.', 'err'); redirect('install.php?id=' . $id); }
         if (trim((string)($_POST['expires_at'] ?? '')) !== '' && $exp === null) { flash('That expiry date is not valid.', 'err'); redirect('install.php?id=' . $id); }
-        $pdo->prepare('UPDATE installs SET name = ?, status = ?, expires_at = ?, url_override = ?, message = ?, notes = ? WHERE id = ?')->execute([
+        $newClinic = (int)($_POST['clinic_id'] ?? 0);
+        if ($newClinic && !clinic_get($newClinic)) $newClinic = 0;
+        $joined = $newClinic && $newClinic !== (int)$inst['clinic_id'];
+        if ($joined) { $exp = null; $url = ''; } // joining a clinic: the clinic's expiry and URL take over
+        $pdo->prepare('UPDATE installs SET name = ?, status = ?, expires_at = ?, url_override = ?, message = ?, notes = ?, clinic_id = ? WHERE id = ?')->execute([
             clip($_POST['name'] ?? '', 120) ?: null,
             ($_POST['status'] ?? '') === 'blocked' ? 'blocked' : 'active',
             $exp,
             $url === '' ? null : $url,
             clip($_POST['message'] ?? '', 500) ?: null,
             utf8_cut((string)($_POST['notes'] ?? ''), 2000) ?: null,
+            $newClinic ?: null,
             $id,
         ]);
-        flash('Saved. The app picks this up at its next check-in (within ~10 minutes, or on restart).');
+        flash(($joined ? 'Moved into the clinic; its expiry and URL now apply. ' : '') . 'Saved. The app picks this up at its next check-in (within ~10 minutes, or on restart).');
     }
     redirect('install.php?id=' . $id);
 }
@@ -65,9 +70,10 @@ $e = effective_expiry($inst);
   <h2>Control</h2>
   <div class="grid">
     <div><label>Label (your own name for this PC / clinic)</label><input type="text" name="name" value="<?= h($inst['name']) ?>" maxlength="120"></div>
+    <div><label>Clinic</label><select name="clinic_id"><option value="0">- none (global settings) -</option><?php foreach (clinics_all() as $cl): ?><option value="<?= (int)$cl['id'] ?>"<?= (int)$inst['clinic_id'] === (int)$cl['id'] ? ' selected' : '' ?>><?= h($cl['name']) ?></option><?php endforeach; ?></select></div>
     <div><label>Status</label><select name="status"><option value="active"<?= $inst['status'] === 'active' ? ' selected' : '' ?>>Active</option><option value="blocked"<?= $inst['status'] === 'blocked' ? ' selected' : '' ?>>Blocked (locks the app)</option></select></div>
-    <div><label>Access expires (<?= h(cfg()['timezone'] ?? 'UTC') ?>) - empty = never</label><input type="datetime-local" name="expires_at" value="<?= h(input_local($inst['expires_at'])) ?>"></div>
-    <div><label>Site URL for this install - empty = use global default</label><input type="text" name="url_override" value="<?= h($inst['url_override']) ?>" placeholder="https://..."></div>
+    <div><label>This PC's own expiry (<?= h(cfg()['timezone'] ?? 'UTC') ?>) - empty = follow the clinic</label><input type="datetime-local" name="expires_at" value="<?= h(input_local($inst['expires_at'])) ?>"></div>
+    <div><label>This PC's own site URL - empty = follow the clinic / global default</label><input type="text" name="url_override" value="<?= h($inst['url_override']) ?>" placeholder="https://..."></div>
   </div>
   <label>Message shown to the user (on the lock screen)</label><input type="text" name="message" value="<?= h($inst['message']) ?>" maxlength="500">
   <label>Private notes</label><textarea name="notes"><?= h($inst['notes']) ?></textarea>
