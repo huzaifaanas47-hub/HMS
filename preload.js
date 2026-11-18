@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('api', {
   enroll: (code) => ipcRenderer.invoke('enroll', code),
   onLoadTabs: (cb) => ipcRenderer.on('load-tabs', (e, tabs) => cb(tabs)),
   onActiveTab: (cb) => ipcRenderer.on('active-tab', (e, tabId) => cb(tabId)),
+  onTabInfo: (cb) => ipcRenderer.on('tab-info', (e, info) => cb(info)),
   onPolicyState: (cb) => ipcRenderer.on('policy-state', (e, state) => cb(state)),
   getSetupData: () => ipcRenderer.invoke('get-setup-data'),
   saveSetup: (data) => ipcRenderer.invoke('save-setup', data)

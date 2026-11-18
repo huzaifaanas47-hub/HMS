@@ -10,7 +10,7 @@ const origins = require('./src/origins');
 const { createCredentials } = require('./src/credentials');
 const { createPolicy } = require('./src/policy');
 
-const TAB_BAR_HEIGHT = 48;
+const TAB_BAR_HEIGHT = 52; // keep in sync with --bar-h in renderer/topbar.css
 const RENDERER_DIR = path.join(__dirname, 'renderer');
 const FALLBACK_URL = appConfig.defaultUrl || 'https://medicglobe.fun';
 const LEGACY_CONFIG_NAME = 'multirole-config'; // pre-HMS name of the config file
@@ -213,14 +213,36 @@ function autofillCredentials(view, tabId) {
 
 /* --------------------------------------------------------------------- views */
 
+// What the tab bar shows for a tab: the real host the page is on and whether it is encrypted.
+// Computed here from the actual webContents URL, never from anything the page can set.
+function tabInfo(tabId) {
+  const info = { id: tabId, level: 'none', host: '', loading: false };
+  const view = views[tabId];
+  if (!view || view.webContents.isDestroyed()) return info;
+  info.loading = view.webContents.isLoading();
+  const u = origins.parse(view.webContents.getURL());
+  if (origins.isHttp(u)) {
+    info.host = u.host;
+    info.level = u.protocol === 'https:' ? 'secure' : (origins.isTrustedTransport(u) ? 'local' : 'insecure');
+  }
+  return info;
+}
+
+function sendTabInfo(tabId) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tab-info', tabInfo(tabId));
+}
+
 function createViewForTab(tab) {
   const partition = `persist:${tab.id}`; // isolated session per tab (cookies, localStorage, cache)
   const view = new WebContentsView({
-    webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true }
+    webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true, webviewTag: false }
   });
   view.setBackgroundColor('#ffffff');
   hardenSession(session.fromPartition(partition), partition);
   guardContents(view.webContents);
+  ['did-start-loading', 'did-stop-loading', 'did-navigate', 'did-navigate-in-page', 'did-fail-load'].forEach((evt) => {
+    view.webContents.on(evt, () => { if (!view.webContents.isDestroyed()) sendTabInfo(tab.id); });
+  });
   view.webContents.on('did-finish-load', () => autofillCredentials(view, tab.id));
   const url = resolveTab(tab);
   viewUrls.set(tab.id, url);
@@ -265,6 +287,14 @@ function switchTab(tabId) {
   resizeCurrentView();
   setTimeout(resizeCurrentView, 50);
   mainWindow.webContents.send('active-tab', tabId);
+  sendTabInfo(tabId);
+}
+
+function cycleTab(delta) {
+  const tabs = getTabs() || [];
+  if (locked || tabs.length < 2) return;
+  const i = tabs.findIndex(t => t.id === currentTab);
+  switchTab(tabs[(i + delta + tabs.length) % tabs.length].id);
 }
 
 // Reload any tab whose resolved URL changed (base URL pushed from the admin panel, edited in setup).
@@ -377,9 +407,11 @@ function createMainWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      webviewTag: false
     }
   });
+  mainWindow.webContents.on('will-attach-webview', e => e.preventDefault());
   mainWindow.webContents.on('will-navigate', e => e.preventDefault());
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.loadFile(path.join(RENDERER_DIR, 'index.html'));
@@ -424,9 +456,11 @@ function openSetupWindow(isEdit) {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      webviewTag: false
     }
   });
+  setupWindow.webContents.on('will-attach-webview', e => e.preventDefault());
   setupWindow.setMenuBarVisibility(false);
   setupWindow.webContents.on('will-navigate', e => e.preventDefault());
   setupWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -455,7 +489,7 @@ function buildMenu() {
       submenu: [
         { label: 'Edit Tabs...', click: () => openSetupWindow(true) },
         { type: 'separator' },
-        { label: 'Reload Current Tab', click: withTab(id => views[id] && views[id].webContents.reload()) },
+        { label: 'Reload Current Tab', accelerator: 'CmdOrCtrl+R', click: withTab(id => views[id] && views[id].webContents.reload()) },
         { label: 'Fill Saved Login', click: withTab(id => views[id] && autofillCredentials(views[id], id)) },
         { type: 'separator' },
         { label: 'Log Out This Tab...', click: withTab(id => confirmLogout(id)) },
@@ -465,7 +499,16 @@ function buildMenu() {
       ]
     },
     { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
-    { label: 'View', submenu: [{ role: 'toggleDevTools' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }] },
+    {
+      label: 'View',
+      submenu: [
+        { label: 'Next Tab', accelerator: 'Ctrl+Tab', click: () => cycleTab(1) },
+        { label: 'Previous Tab', accelerator: 'Ctrl+Shift+Tab', click: () => cycleTab(-1) },
+        { type: 'separator' },
+        ...(app.isPackaged ? [] : [{ role: 'toggleDevTools' }, { type: 'separator' }]), // no DevTools in release builds
+        { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }
+      ]
+    },
     { label: 'Help', submenu: [{ label: 'About HMS', click: showAbout }] }
   ]));
 }
@@ -550,6 +593,11 @@ ipcMain.handle('save-setup', (event, payload) => {
 /* ----------------------------------------------------------------------- app */
 
 app.whenReady().then(async () => {
+  // HMS's own windows (tab bar, setup) never need camera, location, etc. Only the per-tab
+  // sessions get the narrow allow-list in hardenSession().
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => callback(false));
+  session.defaultSession.setPermissionCheckHandler(() => false);
+
   migrateLegacyStore();
   const removed = creds.migrateLegacy();
   applyInstallUrl();
