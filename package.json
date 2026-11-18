@@ -10,7 +10,8 @@
     "start": "electron .",
     "build": "electron-builder",
     "build:win": "electron-builder --win nsis --publish never",
-    "check": "node --check main.js && node --check preload.js && node --check src/origins.js && node --check src/credentials.js && node --check src/policy.js"
+    "check": "node --check main.js && node --check preload.js && node --check src/origins.js && node --check src/credentials.js && node --check src/policy.js",
+    "build:mac": "electron-builder --mac dmg --publish never"
   },
   "devDependencies": {
     "electron": "^45.3.3",
@@ -49,6 +50,24 @@
       "shortcutName": "HMS",
       "include": "build/installer.nsh"
     },
-    "artifactName": "HMS-Setup-${version}.${ext}"
+    "artifactName": "HMS-Setup-${version}.${ext}",
+    "mac": {
+      "category": "public.app-category.medical",
+      "icon": "build/icon.png",
+      "identity": "-",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "artifactName": "HMS-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "HMS ${version}"
+    }
   }
 }

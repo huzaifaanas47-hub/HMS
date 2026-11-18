@@ -443,7 +443,9 @@ function showAbout() {
 
 function buildMenu() {
   const withTab = (fn) => () => { if (currentTab) fn(currentTab); };
+  const isMac = process.platform === 'darwin';
   Menu.setApplicationMenu(Menu.buildFromTemplate([
+    ...(isMac ? [{ role: 'appMenu' }] : []),
     {
       label: 'File',
       submenu: [
@@ -455,9 +457,10 @@ function buildMenu() {
         { label: 'Log Out This Tab...', click: withTab(id => confirmLogout(id)) },
         { label: 'Log Out All Tabs...', click: () => confirmLogout(null) },
         { type: 'separator' },
-        { role: 'quit' }
+        ...(isMac ? [{ role: 'close' }] : [{ role: 'quit' }])
       ]
     },
+    { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
     { label: 'View', submenu: [{ role: 'toggleDevTools' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }] },
     { label: 'Help', submenu: [{ label: 'About HMS', click: showAbout }] }
   ]));

@@ -1,6 +1,6 @@
 # HMS Desktop
 
-Windows desktop client for the Hospital Management System. It opens your HMS website in
+Desktop client (Windows and macOS) for the Hospital Management System. It opens your HMS website in
 up to 20 tabs, each with its **own isolated session**, so you can be logged in as several
 roles at once. A small PHP **admin panel** (`server/`) lets you watch every installation and
 control it remotely: change the site URL, set an expiry time, block or message an install.
@@ -52,6 +52,17 @@ Or locally: `npm install && npm run build:win` (on Windows).
 
 The installer asks for the **HMS Server Address** after the folder page and stores it next to
 `HMS.exe`. Silent install: `HMS-Setup-2.0.0.exe /S /URL=https://hospital.example.com`.
+
+### macOS
+
+The same workflow also builds `HMS-<version>-mac-arm64.dmg` (Apple Silicon: M1/M2/M3/M4) and `HMS-<version>-mac-x64.dmg` (Intel)
+as the artifact **HMS-Installer-Mac**. Open the dmg and drag HMS to Applications.
+* The app is **not notarized** (no Apple developer account), only ad-hoc signed. The first time, **right-click HMS → Open → Open**
+  (or System Settings → Privacy & Security → *Open Anyway*). After that it opens normally.
+* There is no installer page on Mac. On first launch the setup screen asks for the site address; if your admin panel has a
+  default URL / clinic URL it is pushed to the app automatically within seconds.
+* Saved passwords use the macOS Keychain. Everything else (tabs, clinics, expiry, block) works the same.
+* Local build: `npm install && npm run build:mac` (on a Mac).
 
 ## 3. Controlling installs: clinics
 
