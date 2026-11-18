@@ -30,19 +30,25 @@ function db(): PDO {
     return $pdo;
 }
 
-/* Upgrades an existing database in place (v2: clinics). Runs once, then costs one tiny query per request. */
+/* Upgrades an existing database in place (v2: clinics, v3: downloads). Runs once, then costs one tiny query per request. */
 function ensure_schema(PDO $pdo): void {
     try { $v = $pdo->query("SELECT v FROM settings WHERE k = 'schema_version'")->fetchColumn(); }
     catch (Throwable $e) { return; } // not installed yet
-    if ($v === '2') return;
+    if ($v === '3') return;
+    $opts = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
     $pdo->exec("CREATE TABLE IF NOT EXISTS clinics (
         id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL UNIQUE, url VARCHAR(2048) NULL,
         status ENUM('active','blocked') NOT NULL DEFAULT 'active', expires_at DATETIME NULL,
         message VARCHAR(500) NULL, notes TEXT NULL, created_at DATETIME NOT NULL
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    ) $opts");
     $has = (int)$pdo->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'installs' AND COLUMN_NAME = 'clinic_id'")->fetchColumn();
     if (!$has) $pdo->exec('ALTER TABLE installs ADD COLUMN clinic_id INT NULL, ADD KEY idx_clinic (clinic_id)');
-    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema_version', '2') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
+    $pdo->exec("CREATE TABLE IF NOT EXISTS releases (
+        id INT AUTO_INCREMENT PRIMARY KEY, platform VARCHAR(20) NOT NULL, version VARCHAR(20) NOT NULL,
+        stored VARCHAR(80) NOT NULL, filename VARCHAR(160) NOT NULL, size BIGINT NOT NULL, sha256 CHAR(64) NOT NULL,
+        notes VARCHAR(500) NULL, downloads INT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL, KEY idx_platform (platform, id)
+    ) $opts");
+    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema_version', '3') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
 }
 
 function h($v): string { return htmlspecialchars((string)$v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
@@ -260,7 +266,7 @@ function redirect(string $to): void { header('Location: ' . $to); exit; }
 /* ------------------------------------------------------------------ layout */
 
 function page_header(string $title, string $active = ''): void {
-    $nav = ['clinics.php' => 'Clinics', 'index.php' => 'PCs', 'settings.php' => 'Settings'];
+    $nav = ['clinics.php' => 'Clinics', 'index.php' => 'PCs', 'releases.php' => 'Downloads', 'settings.php' => 'Settings'];
     echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
         . '<title>' . h($title) . ' - HMS Admin</title><style>
 *{box-sizing:border-box}body{margin:0;font:14px/1.45 -apple-system,Segoe UI,Arial,sans-serif;background:#f3f5f9;color:#1c2330}
@@ -286,3 +292,41 @@ code,.mono{font-family:Consolas,monospace;font-size:12px;background:#eef1f6;padd
 }
 
 function page_footer(): void { echo '</main></body></html>'; }
+
+
+/* ---------------------------------------------------------------- downloads */
+
+const HMS_PLATFORMS = [
+    'windows'   => ['label' => 'Windows',            'ext' => 'exe'],
+    'mac-arm64' => ['label' => 'Mac (Apple chip)',   'ext' => 'dmg'],
+    'mac-x64'   => ['label' => 'Mac (Intel chip)',   'ext' => 'dmg'],
+];
+
+function releases_dir(): string { return __DIR__ . '/releases'; }
+
+function release_latest(string $platform): ?array {
+    $st = db()->prepare('SELECT * FROM releases WHERE platform = ? ORDER BY id DESC LIMIT 1');
+    $st->execute([$platform]);
+    return $st->fetch() ?: null;
+}
+
+function fmt_size($b): string {
+    $b = (float)$b;
+    if ($b >= 1073741824) return number_format($b / 1073741824, 1) . ' GB';
+    if ($b >= 1048576) return number_format($b / 1048576, 0) . ' MB';
+    return number_format(max(1, $b / 1024), 0) . ' KB';
+}
+
+function ini_bytes(string $k): int {
+    $v = trim((string)ini_get($k));
+    if ($v === '') return 0;
+    $n = (float)$v;
+    switch (strtolower(substr($v, -1))) { case 'g': $n *= 1024; case 'm': $n *= 1024; case 'k': $n *= 1024; }
+    return (int)$n;
+}
+
+function base_dir_url(): string { // https://host/HMS-App  (folder that holds download.php)
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+    $dir = rtrim(str_replace('\\', '/', dirname(dirname($_SERVER['SCRIPT_NAME'] ?? '/admin/x.php'))), '/');
+    return ($https ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? 'your-domain') . $dir;
+}

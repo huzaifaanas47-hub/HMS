@@ -18,7 +18,7 @@ control it remotely: change the site URL, set an expiry time, block or message a
 | `main.js`, `preload.js`, `renderer/`, `src/` | The Electron app |
 | `app-config.json` | `policyUrl` + `publicKey` of your admin server, fallback `defaultUrl` |
 | `build/installer.nsh` | Adds the **"HMS Server Address"** page to the Windows installer |
-| `server/` | The PHP admin panel + check-in API (deploy on your Oracle server) |
+| `server/` | The PHP admin panel + check-in API + public download page (deploy on your Oracle server) |
 | `.github/workflows/build.yml` | Builds the installer on GitHub (no Windows PC needed) |
 
 ## 1. Deploy the admin panel (Oracle server)
@@ -63,6 +63,17 @@ as the artifact **HMS-Installer-Mac**. Open the dmg and drag HMS to Applications
   default URL / clinic URL it is pushed to the app automatically within seconds.
 * Saved passwords use the macOS Keychain. Everything else (tabs, clinics, expiry, block) works the same.
 * Local build: `npm install && npm run build:mac` (on a Mac).
+
+## Giving the app to users (Downloads)
+
+Build the installers once (GitHub **Actions → Build installers**, download `HMS-Installer` and `HMS-Installer-Mac`,
+unzip them), then in the admin panel open **Downloads**, choose the computer type, enter the version and upload the file
+(`.exe` for Windows; the `arm64` `.dmg` for Apple-chip Macs, the `x64` `.dmg` for Intel Macs).
+Give users one link: `https://YOUR-DOMAIN/hms-admin/download.php`. It shows the right installer for their computer with
+install steps; the newest upload per type is what they get. Nobody needs GitHub.
+
+Installers are 80-120 MB. Raise `upload_max_filesize` and `post_max_size` (e.g. 300M) in php.ini, and on nginx add
+`client_max_body_size 300m;`. Files are stored in `lib/releases/` (blocked from direct web access; downloads go through `get.php`).
 
 ## 3. Controlling installs: clinics
 
