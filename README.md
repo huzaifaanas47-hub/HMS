@@ -64,6 +64,32 @@ as the artifact **HMS-Installer-Mac**. Open the dmg and drag HMS to Applications
 * Saved passwords use the macOS Keychain. Everything else (tabs, clinics, expiry, block) works the same.
 * Local build: `npm install && npm run build:mac` (on a Mac).
 
+### Android
+
+The workflow also builds `HMS-<version>-android.apk` (artifact **HMS-Installer-Android**): a native shell around the HMS site
+with the same code entry, signed policy checks, lock screen and expiry as the desktop app. It asks for camera, microphone and
+location on first launch (Android requires the user to tap Allow), supports file upload and downloads, and has a menu with
+Reload, Log out and About. One site session per phone (no role tabs).
+
+An APK only installs over an older one if both are signed with the same key. Create a key once and save it as four repository
+secrets (GitHub → Settings → Secrets and variables → Actions): `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
+`ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. Without them every build uses a fresh temporary key, so a new version
+must be installed after removing the old one.
+
+```
+keytool -genkeypair -keystore hms.keystore -alias hms -keyalg RSA -keysize 2048 -validity 10000
+base64 -w0 hms.keystore      # paste the output as ANDROID_KEYSTORE_BASE64; keep the file safe
+```
+
+## Access codes
+
+**Codes** in the admin panel puts new devices into a clinic without any manual assignment. Create a code for a clinic, set how
+many devices may join and until when, and give users the download link and the code. The app asks for the code the first time it
+opens (Windows, Mac and Android), then gets the clinic's site URL and access date. You can change the limit, the date, or close
+the code at any time; devices already joined follow the new date at their next check-in. Deleting a device frees its place.
+Turn on **Settings → Require an access code** to refuse devices that have not joined with one (devices already listed keep
+working). Wrong guesses are rate-limited (10 per 15 minutes per IP).
+
 ## Giving the app to users (Downloads)
 
 Build the installers once (GitHub **Actions → Build installers**, download `HMS-Installer` and `HMS-Installer-Mac`,
