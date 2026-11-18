@@ -3,7 +3,11 @@ name: Build installers
 on:
   push:
     branches: [ main, master ]
+    tags: [ 'v*' ]   # a tag like v2.1.0 (must match package.json version) publishes a GitHub Release = the update
   workflow_dispatch: {}
+
+permissions:
+  contents: write
 
 jobs:
   windows:
@@ -20,8 +24,14 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # Signed automatically when the WIN_CERT_* secrets exist (base64 .pfx + its password); unsigned otherwise.
       - name: Build Windows installer
-        run: npm run build:win
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.WIN_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+        run: npx electron-builder --win nsis --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
@@ -31,6 +41,8 @@ jobs:
 
   mac:
     runs-on: macos-latest
+    env:
+      HAS_MAC_CERT: ${{ secrets.MAC_CERT_P12_BASE64 != '' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -43,8 +55,24 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build macOS disk images (Intel + Apple Silicon)
-        run: npm run build:mac
+      # With the MAC_CERT_* + APPLE_* secrets the app is signed with a Developer ID and notarized (needed for
+      # auto-update on macOS). Without them it falls back to the ad-hoc build (manual install, no auto-update).
+      - name: Build macOS (Developer ID signed + notarized)
+        if: env.HAS_MAC_CERT == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder --mac --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }} -c.mac.notarize=true
+
+      - name: Build macOS (ad-hoc, unsigned)
+        if: env.HAS_MAC_CERT != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --mac --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }} -c.mac.identity=-
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
@@ -112,3 +140,11 @@ jobs:
         with:
           name: HMS-Installer-Android
           path: dist-android/*.apk
+
+      - name: Attach APK to the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "HMS ${GITHUB_REF_NAME#v}" --notes ""
+          gh release upload "$GITHUB_REF_NAME" dist-android/*.apk --clobber

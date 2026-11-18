@@ -79,7 +79,7 @@
       "hardenedRuntime": true
     },
     "dmg": {
-      "title": "HMS ${version}"
+      "title": "HMS ${version}${arch}"
     },
     "publish": [
       {
