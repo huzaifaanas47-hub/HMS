@@ -1,90 +1,111 @@
-# Multi-Role Portal (Electron)
+# HMS Desktop
 
-A desktop app with 7 isolated tabs — one per login role on your website.
-Each tab has its **own separate session** (cookies, localStorage, cache),
-so you can be logged into 7 different roles on the same site at once,
-and every session is saved automatically across app restarts.
+Windows desktop client for the Hospital Management System. It opens your HMS website in
+up to 20 tabs, each with its **own isolated session**, so you can be logged in as several
+roles at once. A small PHP **admin panel** (`server/`) lets you watch every installation and
+control it remotely: change the site URL, set an expiry time, block or message an install.
 
-## How it works
-
-- Each tab runs in its own Electron `BrowserView` with a unique session
-  `partition` (`persist:role1` ... `persist:role7`). Electron persists
-  these partitions to disk in the app's user-data folder, so logins
-  survive closing/reopening the app — no extra code needed for "save session."
-- On first launch, a setup screen asks you to enter a label + URL for
-  each of the 7 tabs. This is saved to a local config file
-  (`multirole-config.json` in the app's userData folder via `electron-store`).
-- You can change the URLs any time later from **File → Edit Tab URLs**
-  in the main window menu.
-
-## Run it during development
-
-```bash
-cd multirole-app
-npm install
-npm start
+```
+ HMS.exe (user's PC)  ──every 10 min, HTTPS──▶  server/api/checkin.php  ◀── you, via server/admin/
+        ▲                                         (signed answer: URL, expiry, status)
+        └── verifies the answer with a public key baked into the app
 ```
 
-On first run you'll see the setup screen — fill in your 7 role URLs and
-click "Save & Continue." The main window opens with your tabs.
+## What's in this repo
 
-## Easiest way to get the .exe — GitHub Actions (no Windows PC needed)
+| Path | What it is |
+|---|---|
+| `main.js`, `preload.js`, `renderer/`, `src/` | The Electron app |
+| `app-config.json` | `policyUrl` + `publicKey` of your admin server, fallback `defaultUrl` |
+| `build/installer.nsh` | Adds the **"HMS Server Address"** page to the Windows installer |
+| `server/` | The PHP admin panel + check-in API (deploy on your Oracle server) |
+| `.github/workflows/build.yml` | Builds the installer on GitHub (no Windows PC needed) |
 
-This project includes a ready-made GitHub Actions workflow
-(`.github/workflows/build.yml`) that builds the Windows installer for you
-automatically in the cloud. Steps:
+## 1. Deploy the admin panel (Oracle server)
 
-1. Create a free GitHub account if you don't have one, and create a new
-   **empty** repository (public or private, either works).
-2. Push this project folder to that repository:
-   ```bash
-   cd multirole-app
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git branch -M main
-   git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
-   git push -u origin main
+Needs PHP 7.4+ (with `pdo_mysql` and `sodium`) and MySQL/MariaDB. **Use HTTPS** (e.g. certbot).
+
+1. Create an empty database and user.
+2. Upload the contents of `server/` to a web folder, e.g. `/var/www/html/hms-admin/`.
+3. Block the `lib/` folder. Apache reads the included `.htaccess`; on **nginx** add:
+   ```nginx
+   location ^~ /hms-admin/lib/ { deny all; }
    ```
-3. Go to your repository on GitHub → the **Actions** tab. A workflow run
-   called "Build Windows EXE" will start automatically (takes ~2-3
-   minutes).
-4. Once it finishes (green checkmark), click into that run → scroll down
-   to **Artifacts** → download **Multi-Role-Portal-Installer**. That's a
-   zip containing your `.exe` installer — no Windows machine needed on
-   your end at all.
-5. Any time you change the code and push again, a fresh `.exe` is built
-   automatically. You can also trigger a build manually from the Actions
-   tab using "Run workflow" without pushing new code.
+4. Open `https://YOUR-DOMAIN/hms-admin/setup.php`, enter the DB details and an admin login.
+   It creates the tables, generates the signing key, writes `lib/config.php` and **deletes itself**.
+5. Sign in at `https://YOUR-DOMAIN/hms-admin/admin/login.php`.
+   **Settings** shows the two values for the app (`policyUrl`, `publicKey`).
 
-## Build a Windows .exe installer manually (alternative)
+Back up `lib/config.php`: it holds the private signing key. If you lose it you must ship a new
+build with a new public key.
 
-If you'd rather not use GitHub, you can build it directly on a Windows
-machine (or Linux with Wine installed) instead.
+## 2. Point the app at it, build, install
 
-On your Windows machine (with Node.js installed):
+Edit `app-config.json`:
+```json
+{ "policyUrl": "https://YOUR-DOMAIN/hms-admin/api/checkin.php",
+  "publicKey": "<from Settings>",
+  "defaultUrl": "https://medicglobe.fun" }
+```
+Push to GitHub → **Actions → Build Windows EXE → artifact `HMS-Installer`**.
+Or locally: `npm install && npm run build:win` (on Windows).
+
+The installer asks for the **HMS Server Address** after the folder page and stores it next to
+`HMS.exe`. Silent install: `HMS-Setup-2.0.0.exe /S /URL=https://hospital.example.com`.
+
+## 3. Controlling installs
+
+Every install appears under **Installs** after its first check-in, with device name, OS, app
+version, IP and last-seen time (green dot = checked in within 15 min).
+
+* **Site URL**: *Settings → Default site URL* is pushed to every install (it overrides what was typed in the
+  installer); a per-install URL on the *Manage* page wins over it. Tabs set to a path (`/login`)
+  follow the pushed URL; tabs set to a full `https://...` address keep theirs.
+* **Expiry**: per install (date, +7/+30/+90 days, expire now, remove), *new installs expire after N days*,
+  or a **global expiry** that ends access for everyone at once.
+* **Block** an install, and show a **message** on its lock screen.
+* Changes reach an app at its next check-in (≤ 10 min, or on restart). When expired/blocked the
+  app destroys its site tabs and shows only a lock screen.
+
+Only this is sent to the server: random install ID, PC name, OS version, app version, IP.
+No passwords, no page content, no browsing data. Tell your users.
+
+## Security notes
+
+* Check-in answers are **Ed25519-signed**; the app rejects anything not signed by your key, and a
+  nonce stops replays. A fake server or hosts-file trick cannot extend an expiry or push a URL.
+* Expiry is enforced offline too (absolute timestamp). The app remembers the latest time it has
+  seen, so winding the PC clock back does not revive an expired install. A deleted/edited local
+  cache locks the app until it can verify again, and the app locks if it can't reach the server for
+  *N days* (Settings, default 14; 0 = never).
+* **Limit:** this is a desktop app on the user's PC, so a determined admin-level user could still
+  patch the app itself. It stops ordinary users and makes bypassing deliberate, not impossible.
+* Saved passwords are stored only encrypted by the OS keystore (Windows DPAPI). **No plaintext
+  fallback**: if secure storage is unavailable the password isn't saved; old plaintext records are
+  re-encrypted or deleted on upgrade.
+* **Origin checks**: saved logins are auto-filled only on exactly the tab's own origin over
+  https (or localhost/LAN http); in-app navigation/redirects/popups are limited to the configured
+  site origins (others open in the system browser); only the app's own pages may call IPC; web
+  permissions are limited to the configured origins.
+* Admin panel: bcrypt passwords, CSRF tokens, login throttling, strict session cookies,
+  prepared statements, escaped output, security headers.
+
+## Upgrading from v1
+
+* Existing installs keep their tabs, sessions and saved logins (config is migrated from
+  `multirole-config.json` to `hms-config.json`; the `appId` is unchanged so the installer upgrades in place).
+* Tab URLs on the site's own origin become relative paths automatically, so they follow the pushed URL.
+
+## Per-tab logout
+
+Right-click a tab, or use **⏻ Log Out Tab** / *File → Log Out This Tab / All Tabs*. It clears only
+that tab's cookies and site data, then reloads it. Right-click also offers **Forget Saved Login**.
+
+## Development
 
 ```bash
-cd multirole-app
 npm install
-npm run build:win
+npm start          # runs the app
+npm run check      # syntax-checks the JS
 ```
-
-The installer `.exe` will appear in the `dist/` folder
-(e.g. `dist/Multi-Role Portal Setup 1.0.0.exe`). Anyone can run that
-installer to install the app with a desktop + start menu shortcut.
-
-### Optional: custom app icon
-Put a `.ico` file at `build/icon.ico` before building, and it'll be used
-as the app/installer icon (referenced in `package.json` → `build.win.icon`).
-
-## Notes / things you may want to tweak
-
-- **Number of tabs**: currently fixed at 7 in `defaultTabs()` in both
-  `main.js` and `renderer/setup.js`. Change the loop bound there if you
-  ever need more/fewer.
-- **Resetting a single tab's session**: if a role ever needs a forced
-  logout, you'd clear that partition's session
-  (`session.fromPartition('persist:roleX').clearStorageData()`) — ask if
-  you want a "Log out this tab" menu item added.
-- **Config file location**: Windows → `%APPDATA%\multirole-portal\multirole-config.json`.
+Without `policyUrl`/`publicKey` in `app-config.json` the app runs standalone (no admin control).

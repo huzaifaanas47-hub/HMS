@@ -1,18 +1,19 @@
 {
-  "name": "HMS",
+  "name": "hms",
   "productName": "HMS",
-  "version": "1.0.0",
-  "description": "Desktop app For Hospital Managmanet System",
+  "version": "2.0.0",
+  "description": "HMS - desktop client for the Hospital Management System",
   "main": "main.js",
   "author": "Dr.Talha",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
-   "build:win": "electron-builder --win nsis --publish never"
+    "build:win": "electron-builder --win nsis --publish never",
+    "check": "node --check main.js && node --check preload.js && node --check src/origins.js && node --check src/credentials.js && node --check src/policy.js"
   },
   "devDependencies": {
-    "electron": "^31.0.0",
+    "electron": "^45.3.3",
     "electron-builder": "^24.13.3"
   },
   "dependencies": {
@@ -24,12 +25,19 @@
     "files": [
       "main.js",
       "preload.js",
+      "app-config.json",
+      "src/**/*",
       "renderer/**/*",
       "package.json"
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "build/icon.ico"
     },
@@ -37,7 +45,10 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
-    }
+      "createStartMenuShortcut": true,
+      "shortcutName": "HMS",
+      "include": "build/installer.nsh"
+    },
+    "artifactName": "HMS-Setup-${version}.${ext}"
   }
 }

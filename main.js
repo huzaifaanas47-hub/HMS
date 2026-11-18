@@ -1,352 +1,572 @@
-const { app, BrowserWindow, BrowserView, ipcMain, Menu, session, safeStorage } = require('electron');
+'use strict';
+const { app, BrowserWindow, WebContentsView, ipcMain, Menu, session, shell, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const { fileURLToPath } = require('url');
 const Store = require('electron-store');
 
-const store = new Store({ name: 'multirole-config' });
-
-let mainWindow;
-let views = {}; // tabId -> BrowserView
-let currentTab = null;
+const appConfig = require('./app-config.json');
+const origins = require('./src/origins');
+const { createCredentials } = require('./src/credentials');
+const { createPolicy } = require('./src/policy');
 
 const TAB_BAR_HEIGHT = 46;
+const RENDERER_DIR = path.join(__dirname, 'renderer');
+const FALLBACK_URL = appConfig.defaultUrl || 'https://medicglobe.fun';
+const LEGACY_CONFIG_NAME = 'multirole-config'; // pre-HMS name of the config file
 
-function getConfig() {
-  return store.get('tabs', null); // array of { id, label, url }
+const store = new Store({ name: 'hms-config' });
+const creds = createCredentials(store);
+
+let policy = null;
+let mainWindow = null;
+let setupWindow = null;
+let locked = false;
+let currentTab = null;
+const views = {};          // tabId -> WebContentsView
+const viewUrls = new Map(); // tabId -> URL last loaded by us
+const hardenedSessions = new Set();
+
+/* ------------------------------------------------------------------ config */
+
+function migrateLegacyStore() {
+  if (store.size > 0) return;
+  const legacy = new Store({ name: LEGACY_CONFIG_NAME });
+  if (legacy.size > 0) store.store = legacy.store;
 }
 
-function saveConfig(tabs) {
-  store.set('tabs', tabs);
+// The installer writes the address typed on its "HMS Server Address" page next to the exe.
+function applyInstallUrl() {
+  if (!app.isPackaged) return;
+  const file = path.join(path.dirname(process.execPath), 'install-url.txt');
+  try {
+    const st = fs.statSync(file);
+    if (store.get('installStamp') === st.mtimeMs) return; // already applied; re-running the installer re-applies
+    const url = origins.normalizeBaseUrl(fs.readFileSync(file, 'utf8'));
+    if (url) store.set('baseUrl', url);
+    store.set('installStamp', st.mtimeMs);
+  } catch (e) { /* no install-url.txt: first run from source, or older install */ }
 }
 
-// --- Credentials: password is OS-encrypted (Windows DPAPI via safeStorage) before saving to disk ---
-function saveCredentials(tabId, email, password) {
-  const record = { email: email || '' };
-  if (password) {
-    if (safeStorage.isEncryptionAvailable()) {
-      record.password = safeStorage.encryptString(password).toString('base64');
-      record.encrypted = true;
-    } else {
-      record.password = password; // fallback, unencrypted
-      record.encrypted = false;
-    }
-  } else {
-    // no new password provided: keep existing one if present
-    const existing = store.get(`creds.${tabId}`, null);
-    if (existing) {
-      record.password = existing.password;
-      record.encrypted = existing.encrypted;
-    }
-  }
-  store.set(`creds.${tabId}`, record);
+function ensureBaseUrl() {
+  if (store.get('baseUrl')) return;
+  const tabs = store.get('tabs');
+  const first = tabs && tabs[0] && origins.parse(tabs[0].url);
+  store.set('baseUrl', first && origins.isHttp(first) ? first.origin + '/' : FALLBACK_URL);
 }
 
-function getCredentials(tabId) {
-  const record = store.get(`creds.${tabId}`, null);
-  if (!record) return { email: '', password: '' };
-  let password = '';
-  if (record.password) {
-    if (record.encrypted && safeStorage.isEncryptionAvailable()) {
-      try {
-        password = safeStorage.decryptString(Buffer.from(record.password, 'base64'));
-      } catch (e) {
-        password = '';
-      }
-    } else {
-      password = record.password;
-    }
-  }
-  return { email: record.email || '', password };
+function getBaseUrl() {
+  const managed = policy && policy.evaluate().baseUrl;
+  return origins.normalizeBaseUrl(managed || '') || store.get('baseUrl') || FALLBACK_URL;
+}
+
+function isBaseManaged() {
+  return !!(policy && policy.evaluate().baseUrl);
+}
+
+function getTabs() {
+  return store.get('tabs', null);
+}
+
+// v1 stored absolute URLs. Convert the ones on the site's own origin so they follow the base URL.
+function migrateTabs() {
+  const tabs = getTabs();
+  if (!tabs) return;
+  const base = getBaseUrl();
+  store.set('tabs', tabs.map(t => ({ id: t.id, label: t.label, url: origins.normalizeTabUrl(t.url, base) || '/' })));
 }
 
 function defaultTabs() {
-  const arr = [];
-  for (let i = 1; i <= 7; i++) {
-    arr.push({ id: `role${i}`, label: `Role ${i}`, url: 'https://medicglobe.fun' });
-  }
-  return arr;
+  return Array.from({ length: 7 }, (_, i) => ({ id: `role${i + 1}`, label: `Role ${i + 1}`, url: '/' }));
 }
+
+function resolveTab(tab) {
+  return origins.resolveTabUrl(tab.url, getBaseUrl());
+}
+
+function allowedOrigins() {
+  const set = new Set();
+  const base = origins.parse(getBaseUrl());
+  if (base) set.add(base.origin);
+  (getTabs() || []).forEach(t => {
+    const u = origins.parse(resolveTab(t));
+    if (u) set.add(u.origin);
+  });
+  return set;
+}
+
+function isAllowedUrl(url) {
+  const u = origins.parse(url);
+  if (!u) return false;
+  if (u.protocol === 'blob:') return allowedOrigins().has(u.origin);
+  return origins.isHttp(u) && allowedOrigins().has(u.origin);
+}
+
+/* ---------------------------------------------------------- IPC sender check */
+
+function samePath(a, b) {
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+// Only our own renderer pages (file:// inside /renderer, top frame) may call IPC handlers,
+// and only from the window that is meant to use that channel.
+function fromWindow(event, win) {
+  if (!win || win.isDestroyed() || event.sender !== win.webContents) return false;
+  const frame = event.senderFrame;
+  if (!frame || frame.parent) return false;
+  try {
+    const p = path.normalize(fileURLToPath(frame.url));
+    return samePath(path.dirname(p), RENDERER_DIR);
+  } catch (e) {
+    return false;
+  }
+}
+
+function onMain(channel, fn) {
+  ipcMain.on(channel, (event, ...args) => { if (fromWindow(event, mainWindow)) fn(...args); });
+}
+
+/* ------------------------------------------------------ navigation hardening */
+
+function openExternalSafe(url) {
+  const u = origins.parse(url);
+  if (origins.isHttp(u)) shell.openExternal(u.href);
+}
+
+function guardContents(contents) {
+  const onNav = (event, legacyUrl) => {
+    const url = event.url || legacyUrl;
+    if (!isAllowedUrl(url)) {
+      event.preventDefault();
+      openExternalSafe(url);
+    }
+  };
+  contents.on('will-navigate', onNav);
+  contents.on('will-redirect', onNav);
+  contents.setWindowOpenHandler(({ url }) => {
+    if (url === 'about:blank' || isAllowedUrl(url)) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: { autoHideMenuBar: true, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } }
+      };
+    }
+    openExternalSafe(url);
+    return { action: 'deny' };
+  });
+  contents.on('did-create-window', (win) => guardContents(win.webContents));
+}
+
+const ALLOWED_PERMISSIONS = new Set(['fullscreen', 'clipboard-sanitized-write', 'notifications', 'media']);
+
+function hardenSession(ses, partition) {
+  if (hardenedSessions.has(partition)) return;
+  hardenedSessions.add(partition);
+  ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+    callback(ALLOWED_PERMISSIONS.has(permission) && isAllowedUrl(details.requestingUrl || wc.getURL()));
+  });
+  ses.setPermissionCheckHandler((wc, permission, requestingOrigin) => {
+    return ALLOWED_PERMISSIONS.has(permission) && isAllowedUrl(requestingOrigin);
+  });
+}
+
+/* ------------------------------------------------------------------ autofill */
+
+// Fills (never submits) the saved login - but only when the page is on exactly the origin
+// configured for that tab, over a trusted transport. A redirect or injected page on another
+// origin never receives the credentials.
+function autofillCredentials(view, tabId) {
+  const tab = (getTabs() || []).find(t => t.id === tabId);
+  if (!tab || view.webContents.isDestroyed()) return;
+  const saved = creds.get(tabId);
+  if (!saved.email && !saved.password) return;
+
+  const expected = origins.parse(resolveTab(tab));
+  const current = origins.parse(view.webContents.getURL());
+  if (!expected || !current || current.origin !== expected.origin || !origins.isTrustedTransport(current)) return;
+
+  const script = `
+    (function () {
+      try {
+        if (location.origin !== ${JSON.stringify(expected.origin)}) return;
+        const emailVal = ${JSON.stringify(saved.email)};
+        const passVal = ${JSON.stringify(saved.password)};
+        function setVal(el, val) {
+          if (!el || !val) return;
+          const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set;
+          setter.call(el, val);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        const emailSelectors = ['input[type="email"]', 'input[name*="email" i]', 'input[id*="email" i]',
+          'input[name*="user" i]', 'input[id*="user" i]', 'input[name*="login" i]', 'input[id*="login" i]'];
+        let emailEl = null;
+        for (const sel of emailSelectors) { emailEl = document.querySelector(sel); if (emailEl) break; }
+        setVal(emailEl, emailVal);
+        setVal(document.querySelector('input[type="password"]'), passVal);
+      } catch (e) { /* silent */ }
+    })();`;
+  setTimeout(() => {
+    if (!view.webContents.isDestroyed()) view.webContents.executeJavaScript(script).catch(() => {});
+  }, 700);
+}
+
+/* --------------------------------------------------------------------- views */
+
+function createViewForTab(tab) {
+  const partition = `persist:${tab.id}`; // isolated session per tab (cookies, localStorage, cache)
+  const view = new WebContentsView({
+    webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true }
+  });
+  view.setBackgroundColor('#ffffff');
+  hardenSession(session.fromPartition(partition), partition);
+  guardContents(view.webContents);
+  view.webContents.on('did-finish-load', () => autofillCredentials(view, tab.id));
+  const url = resolveTab(tab);
+  viewUrls.set(tab.id, url);
+  view.webContents.loadURL(url).catch(() => {});
+  return view;
+}
+
+function ensureView(tab) {
+  if (!views[tab.id]) views[tab.id] = createViewForTab(tab);
+  return views[tab.id];
+}
+
+function destroyView(tabId) {
+  const view = views[tabId];
+  if (!view) return;
+  try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.removeChildView(view); } catch (e) { /* not attached */ }
+  try { if (!view.webContents.isDestroyed()) view.webContents.close(); } catch (e) { /* already gone */ }
+  delete views[tabId];
+  viewUrls.delete(tabId);
+}
+
+function destroyAllViews() {
+  Object.keys(views).forEach(destroyView);
+}
+
+function resizeCurrentView() {
+  if (!currentTab || !views[currentTab] || !mainWindow || mainWindow.isDestroyed()) return;
+  const { width, height } = mainWindow.getContentBounds();
+  views[currentTab].setBounds({ x: 0, y: TAB_BAR_HEIGHT, width: Math.max(0, width), height: Math.max(0, height - TAB_BAR_HEIGHT) });
+}
+
+function switchTab(tabId) {
+  if (locked || !mainWindow) return;
+  const tab = (getTabs() || []).find(t => t.id === tabId);
+  if (!tab) return;
+  const view = ensureView(tab);
+  if (currentTab && currentTab !== tabId && views[currentTab]) {
+    mainWindow.contentView.removeChildView(views[currentTab]);
+  }
+  mainWindow.contentView.addChildView(view);
+  currentTab = tabId;
+  resizeCurrentView();
+  setTimeout(resizeCurrentView, 50);
+  mainWindow.webContents.send('active-tab', tabId);
+}
+
+// Reload any tab whose resolved URL changed (base URL pushed from the admin panel, edited in setup).
+function syncViews() {
+  const tabs = getTabs() || [];
+  const keep = new Set(tabs.map(t => t.id));
+  Object.keys(views).forEach(id => {
+    if (!keep.has(id)) {
+      if (currentTab === id) currentTab = null;
+      destroyView(id);
+    }
+  });
+  if (locked) return;
+  tabs.forEach(tab => {
+    const view = views[tab.id];
+    if (!view) return;
+    const url = resolveTab(tab);
+    if (viewUrls.get(tab.id) !== url) {
+      viewUrls.set(tab.id, url);
+      view.webContents.loadURL(url).catch(() => {});
+    }
+  });
+}
+
+/* -------------------------------------------------------------------- logout */
+
+async function logoutTab(tabId) {
+  const tab = (getTabs() || []).find(t => t.id === tabId);
+  if (!tab) return;
+  const view = views[tab.id];
+  if (view) await view.webContents.loadURL('about:blank').catch(() => {}); // stop the page re-saving state
+  const ses = session.fromPartition(`persist:${tab.id}`);
+  await ses.clearStorageData();
+  await ses.clearCache();
+  await ses.clearAuthCache();
+  if (view && !view.webContents.isDestroyed()) {
+    const url = resolveTab(tab);
+    viewUrls.set(tab.id, url);
+    view.webContents.loadURL(url).catch(() => {});
+  }
+}
+
+async function confirmLogout(tabId) {
+  const tabs = getTabs() || [];
+  const all = tabId === null;
+  const tab = tabs.find(t => t.id === tabId);
+  if (!all && !tab) return;
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    buttons: ['Log out', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    message: all ? 'Log out of all tabs?' : `Log out of "${tab.label}"?`,
+    detail: all
+      ? 'This clears the saved session (cookies and site data) of every tab.'
+      : 'This clears the saved session (cookies and site data) of this tab only. Other tabs stay logged in.'
+  });
+  if (response !== 0) return;
+  for (const t of (all ? tabs : [tab])) await logoutTab(t.id);
+}
+
+async function confirmForgetLogin(tabId) {
+  const tab = (getTabs() || []).find(t => t.id === tabId);
+  if (!tab) return;
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'question', buttons: ['Forget', 'Cancel'], defaultId: 1, cancelId: 1,
+    message: `Forget the saved login for "${tab.label}"?`,
+    detail: 'The saved email and password are deleted from this computer.'
+  });
+  if (response === 0) creds.clear(tabId);
+}
+
+/* ------------------------------------------------------------------- policy */
+
+function publicPolicyState(eff) {
+  return { state: eff.state, message: eff.message, expiresAt: eff.expiresAt, daysLeft: eff.daysLeft };
+}
+
+function sendPolicyState() {
+  if (mainWindow && !mainWindow.isDestroyed() && policy) {
+    mainWindow.webContents.send('policy-state', publicPolicyState(policy.evaluate()));
+  }
+}
+
+function applyPolicy(eff) {
+  const wasLocked = locked;
+  locked = eff.state !== 'ok';
+  sendPolicyState();
+  if (locked) {
+    destroyAllViews(); // an expired or blocked install shows nothing but the lock screen
+  } else if (wasLocked) {
+    const tabs = getTabs() || [];
+    if (tabs.length) switchTab(currentTab && tabs.some(t => t.id === currentTab) ? currentTab : tabs[0].id);
+  } else {
+    syncViews();
+  }
+}
+
+/* ------------------------------------------------------------------- windows */
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
+    title: 'HMS',
     icon: path.join(__dirname, 'build', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      sandbox: true
     }
   });
-
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  mainWindow.webContents.on('will-navigate', e => e.preventDefault());
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.loadFile(path.join(RENDERER_DIR, 'index.html'));
 
   ['resize', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen', 'restore', 'show'].forEach(evt => {
-    mainWindow.on(evt, () => {
-      resizeCurrentView();
-      // window size can settle a moment after the event on Windows (DPI scaling / maximize animation)
-      setTimeout(resizeCurrentView, 50);
-    });
+    mainWindow.on(evt, () => { resizeCurrentView(); setTimeout(resizeCurrentView, 50); });
   });
-  mainWindow.on('resized', () => resizeCurrentView());
+  mainWindow.on('resized', resizeCurrentView);
+  mainWindow.on('closed', () => {
+    Object.keys(views).forEach(id => { try { views[id].webContents.close(); } catch (e) { /* gone */ } });
+    Object.keys(views).forEach(id => delete views[id]);
+    viewUrls.clear();
+    mainWindow = null;
+    currentTab = null;
+  });
   mainWindow.maximize();
-
   buildMenu();
 
   mainWindow.webContents.once('did-finish-load', () => {
-    const tabs = getConfig();
-    mainWindow.webContents.send('load-tabs', tabs);
-    if (tabs && tabs.length) {
-      switchTab(tabs[0].id, tabs);
-    }
+    const tabs = getTabs() || [];
+    sendTabs();
+    sendPolicyState();
+    if (!locked && tabs.length) switchTab(tabs[0].id);
   });
 }
 
+function sendTabs() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('load-tabs', (getTabs() || []).map(({ id, label }) => ({ id, label })));
+}
+
+function openSetupWindow(isEdit) {
+  if (setupWindow) { setupWindow.focus(); return; }
+  setupWindow = new BrowserWindow({
+    width: 680,
+    height: 760,
+    title: 'HMS Setup',
+    icon: path.join(__dirname, 'build', 'icon.ico'),
+    parent: isEdit && mainWindow ? mainWindow : undefined,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  setupWindow.setMenuBarVisibility(false);
+  setupWindow.webContents.on('will-navigate', e => e.preventDefault());
+  setupWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  setupWindow.loadFile(path.join(RENDERER_DIR, 'setup.html'));
+  setupWindow.on('closed', () => { setupWindow = null; });
+}
+
+function showAbout() {
+  const eff = policy ? policy.evaluate() : null;
+  const lines = [`Version ${app.getVersion()}`, `Site: ${getBaseUrl()}${isBaseManaged() ? ' (set by administrator)' : ''}`];
+  if (policy && policy.active) {
+    lines.push(`Install ID: ${policy.installId}`);
+    lines.push(eff.expiresAt ? `Access until: ${new Date(eff.expiresAt).toLocaleString()}` : 'Access: no expiry');
+    if (policy.getLastError()) lines.push(`Last admin-server check failed: ${policy.getLastError()}`);
+  }
+  dialog.showMessageBox(mainWindow, { type: 'info', title: 'About HMS', message: 'HMS', detail: lines.join('\n') });
+}
+
 function buildMenu() {
-  const template = [
+  const withTab = (fn) => () => { if (currentTab) fn(currentTab); };
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
     {
       label: 'File',
       submenu: [
-        {
-          label: 'Edit Tab URLs...',
-          click: () => openSetupWindow(true)
-        },
+        { label: 'Edit Tabs...', click: () => openSetupWindow(true) },
         { type: 'separator' },
-        {
-          label: 'Reload Current Tab',
-          click: () => {
-            if (currentTab && views[currentTab]) views[currentTab].webContents.reload();
-          }
-        },
-        {
-          label: 'Fill Saved Login',
-          click: () => {
-            if (currentTab && views[currentTab]) autofillCredentials(views[currentTab], currentTab);
-          }
-        },
+        { label: 'Reload Current Tab', click: withTab(id => views[id] && views[id].webContents.reload()) },
+        { label: 'Fill Saved Login', click: withTab(id => views[id] && autofillCredentials(views[id], id)) },
+        { type: 'separator' },
+        { label: 'Log Out This Tab...', click: withTab(id => confirmLogout(id)) },
+        { label: 'Log Out All Tabs...', click: () => confirmLogout(null) },
         { type: 'separator' },
         { role: 'quit' }
       ]
     },
-    {
-      label: 'View',
-      submenu: [
-        { role: 'toggleDevTools' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' }
-      ]
-    }
-  ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+    { label: 'View', submenu: [{ role: 'toggleDevTools' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }] },
+    { label: 'Help', submenu: [{ label: 'About HMS', click: showAbout }] }
+  ]));
 }
 
-function createViewForTab(tab) {
-  const view = new BrowserView({
-    webPreferences: {
-      partition: `persist:${tab.id}`, // isolated session per tab (cookies, localStorage, cache)
-      contextIsolation: true,
-      nodeIntegration: false
-    }
-  });
+/* ----------------------------------------------------------------------- IPC */
 
-  view.webContents.on('did-finish-load', () => {
-    autofillCredentials(view, tab.id);
-  });
-
-  if (tab.url) {
-    view.webContents.loadURL(tab.url);
-  }
-  return view;
-}
-
-// Best-effort autofill: finds common email/username + password fields and fills them.
-// Does NOT auto-submit — user reviews and clicks login themselves.
-function autofillCredentials(view, tabId) {
-  const creds = getCredentials(tabId);
-  if (!creds.email && !creds.password) return;
-
-  const script = `
-    (function() {
-      try {
-        const emailVal = ${JSON.stringify(creds.email)};
-        const passVal = ${JSON.stringify(creds.password)};
-
-        function setVal(el, val) {
-          if (!el || !val) return;
-          const proto = Object.getPrototypeOf(el);
-          const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-          setter.call(el, val);
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-
-        const emailSelectors = [
-          'input[type="email"]',
-          'input[name*="email" i]',
-          'input[id*="email" i]',
-          'input[name*="user" i]',
-          'input[id*="user" i]',
-          'input[name*="login" i]',
-          'input[id*="login" i]'
-        ];
-        const passSelectors = ['input[type="password"]'];
-
-        let emailEl = null;
-        for (const sel of emailSelectors) {
-          emailEl = document.querySelector(sel);
-          if (emailEl) break;
-        }
-        let passEl = document.querySelector(passSelectors[0]);
-
-        setVal(emailEl, emailVal);
-        setVal(passEl, passVal);
-      } catch (e) { /* silent */ }
-    })();
-  `;
-  // small delay so dynamically-rendered login forms exist before we try
-  setTimeout(() => {
-    view.webContents.executeJavaScript(script).catch(() => {});
-  }, 700);
-}
-
-function ensureView(tab) {
-  if (!views[tab.id]) {
-    views[tab.id] = createViewForTab(tab);
-  }
-  return views[tab.id];
-}
-
-function resizeCurrentView() {
-  if (!currentTab || !views[currentTab] || !mainWindow) return;
-  const { width, height } = mainWindow.getContentBounds();
-  // Manual bounds only. Do NOT use setAutoResize here: it adds its own resize delta on top of
-  // setBounds, which made the view larger than the window (content cut off right/bottom).
-  views[currentTab].setBounds({
-    x: 0,
-    y: TAB_BAR_HEIGHT,
-    width: Math.max(0, width),
-    height: Math.max(0, height - TAB_BAR_HEIGHT)
-  });
-}
-
-function switchTab(tabId, tabsOverride) {
-  const tabs = tabsOverride || getConfig();
-  const tab = tabs.find(t => t.id === tabId);
-  if (!tab) return;
-
-  const view = ensureView(tab);
-
-  if (currentTab && views[currentTab]) {
-    mainWindow.removeBrowserView(views[currentTab]);
-  }
-
-  mainWindow.addBrowserView(view);
-  currentTab = tabId;
-  resizeCurrentView();
-  setTimeout(resizeCurrentView, 50);
-
-  if (!view.webContents.getURL() && tab.url) {
-    view.webContents.loadURL(tab.url);
-  }
-
-  mainWindow.webContents.send('active-tab', tabId);
-}
-
-ipcMain.on('switch-tab', (e, tabId) => switchTab(tabId));
-
-ipcMain.on('open-setup', () => openSetupWindow(true));
-
-ipcMain.on('fill-login', () => {
-  if (currentTab && views[currentTab]) autofillCredentials(views[currentTab], currentTab);
+onMain('switch-tab', (tabId) => { if (typeof tabId === 'string') switchTab(tabId); });
+onMain('open-setup', () => openSetupWindow(true));
+onMain('fill-login', () => { if (currentTab && views[currentTab]) autofillCredentials(views[currentTab], currentTab); });
+onMain('logout-tab', (tabId) => { if (typeof tabId === 'string') confirmLogout(tabId); });
+onMain('logout-all', () => confirmLogout(null));
+onMain('recheck-policy', () => { if (policy) policy.check(); });
+onMain('tab-menu', (tabId) => {
+  if (typeof tabId !== 'string' || !(getTabs() || []).some(t => t.id === tabId)) return;
+  Menu.buildFromTemplate([
+    { label: 'Reload', click: () => views[tabId] && views[tabId].webContents.reload() },
+    { label: 'Log Out This Tab...', click: () => confirmLogout(tabId) },
+    { label: 'Forget Saved Login...', click: () => confirmForgetLogin(tabId) }
+  ]).popup({ window: mainWindow });
 });
 
-ipcMain.handle('get-tabs-for-setup', () => {
-  const tabs = getConfig() || defaultTabs();
-  // attach current saved email (never send password back to the UI for security)
-  return tabs.map(t => {
-    const creds = getCredentials(t.id);
-    return { ...t, email: creds.email, hasPassword: !!creds.password };
-  });
+ipcMain.handle('get-setup-data', (event) => {
+  if (!fromWindow(event, setupWindow)) throw new Error('Untrusted sender');
+  const tabs = getTabs() || defaultTabs();
+  return {
+    baseUrl: getBaseUrl(),
+    baseManaged: isBaseManaged(),
+    secureStorage: creds.isSecure(),
+    tabs: tabs.map(t => ({ id: t.id, label: t.label, url: t.url, email: creds.get(t.id).email, hasPassword: creds.hasPassword(t.id) }))
+  };
 });
 
-ipcMain.on('save-tabs', (e, tabs) => {
-  const cleanTabs = tabs.map(({ id, label, url }) => ({ id, label, url }));
-  saveConfig(cleanTabs);
-
-  tabs.forEach(t => {
-    if (t.email || t.password) {
-      saveCredentials(t.id, t.email, t.password);
-    }
-  });
-
-  const keepIds = new Set(cleanTabs.map(t => t.id));
-  Object.keys(views).forEach(id => {
-    if (!keepIds.has(id)) {
-      if (currentTab === id) {
-        mainWindow && mainWindow.removeBrowserView(views[id]);
-        currentTab = null;
-      }
-      views[id].webContents.close();
-      delete views[id];
-    }
-  });
-
-  // rebuild views: remove views whose URL changed, keep others
-  for (const tab of cleanTabs) {
-    const existing = views[tab.id];
-    if (existing) {
-      const loadedUrl = existing.webContents.getURL();
-      if (tab.url && !loadedUrl) {
-        existing.webContents.loadURL(tab.url);
-      }
-    }
+function validateSetup(payload) {
+  if (!payload || !Array.isArray(payload.tabs) || payload.tabs.length < 1 || payload.tabs.length > 20) {
+    return { error: 'Add between 1 and 20 tabs.' };
   }
-  if (mainWindow) {
-    mainWindow.webContents.send('load-tabs', cleanTabs);
-    if (!currentTab && cleanTabs.length) switchTab(cleanTabs[0].id, cleanTabs);
+  let baseUrl = getBaseUrl();
+  if (!isBaseManaged()) {
+    baseUrl = origins.normalizeBaseUrl(payload.baseUrl);
+    if (!baseUrl) return { error: 'Enter a valid site address (https://...).' };
   }
-  if (setupWindow) setupWindow.close();
-});
-
-let setupWindow = null;
-function openSetupWindow(isEdit) {
-  if (setupWindow) {
-    setupWindow.focus();
-    return;
+  const seen = new Set();
+  const tabs = [];
+  for (const [i, t] of payload.tabs.entries()) {
+    if (!t || typeof t.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(t.id) || seen.has(t.id)) return { error: `Tab ${i + 1} is invalid.` };
+    seen.add(t.id);
+    const label = (typeof t.label === 'string' ? t.label.trim() : '').slice(0, 40) || `Tab ${i + 1}`;
+    const url = origins.normalizeTabUrl(t.url, baseUrl);
+    if (!url) return { error: `"${label}": enter a path like /login or a full https:// address.` };
+    const email = typeof t.email === 'string' ? t.email.trim().slice(0, 254) : '';
+    const password = typeof t.password === 'string' ? t.password.slice(0, 256) : '';
+    tabs.push({ id: t.id, label, url, email, password });
   }
-  setupWindow = new BrowserWindow({
-    width: 640,
-    height: 720,
-    icon: path.join(__dirname, 'build', 'icon.ico'),
-    parent: isEdit ? mainWindow : undefined,
-    modal: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false
-    }
-  });
-  setupWindow.loadFile(path.join(__dirname, 'renderer', 'setup.html'));
-  setupWindow.on('closed', () => { setupWindow = null; });
+  return { baseUrl, tabs };
 }
 
-app.whenReady().then(() => {
-  const tabs = getConfig();
-  if (!tabs) {
-    // first run: show setup before main window
-    openSetupWindow(false);
-    ipcMain.once('save-tabs', () => {
-      createMainWindow();
+ipcMain.handle('save-setup', (event, payload) => {
+  if (!fromWindow(event, setupWindow)) throw new Error('Untrusted sender');
+  const v = validateSetup(payload);
+  if (v.error) return { ok: false, error: v.error };
+
+  const warnings = [];
+  if (!isBaseManaged()) store.set('baseUrl', v.baseUrl);
+  store.set('tabs', v.tabs.map(({ id, label, url }) => ({ id, label, url })));
+  v.tabs.forEach(t => {
+    if (!t.email && !t.password) return;
+    const r = creds.save(t.id, t.email, t.password);
+    if (r.passwordSaved === false) warnings.push(`Password for "${t.label}" was not saved: secure storage is not available on this computer.`);
+  });
+
+  if (!mainWindow) createMainWindow();
+  else { sendTabs(); syncViews(); if (!currentTab && !locked && v.tabs.length) switchTab(v.tabs[0].id); }
+  return { ok: true, warnings };
+});
+
+/* ----------------------------------------------------------------------- app */
+
+app.whenReady().then(async () => {
+  migrateLegacyStore();
+  const removed = creds.migrateLegacy();
+  applyInstallUrl();
+  ensureBaseUrl();
+  migrateTabs();
+
+  policy = createPolicy({ store, config: appConfig, appVersion: app.getVersion(), onChange: applyPolicy });
+  locked = policy.evaluate().state !== 'ok';
+
+  // A brand-new install has no policy yet: give the first check a moment so the admin's
+  // default URL is used from the very first page load.
+  if (policy.active && !store.get('policy')) {
+    await Promise.race([policy.check(), new Promise(r => setTimeout(r, 3000))]);
+    locked = policy.evaluate().state !== 'ok';
+  }
+
+  if (!getTabs()) openSetupWindow(false);
+  else createMainWindow();
+  policy.start();
+
+  if (removed > 0) {
+    dialog.showMessageBox({
+      type: 'warning',
+      message: 'Saved passwords removed',
+      detail: `${removed} saved password(s) were stored unencrypted by an older version. Secure storage is not available on this computer, so they were deleted. Please re-enter them once it is.`
     });
-  } else {
-    createMainWindow();
   }
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
-  });
+  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0 && getTabs()) createMainWindow(); });
 });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+app.on('before-quit', () => { if (policy) policy.persist(); });
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

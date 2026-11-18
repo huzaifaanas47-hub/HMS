@@ -2,52 +2,44 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Multi-Role Portal</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+<title>HMS</title>
 <style>
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, Segoe UI, Arial, sans-serif; background: #1e2430; }
-  #tabbar {
-    height: 46px;
-    display: flex;
-    align-items: stretch;
-    background: #161b24;
-    border-bottom: 1px solid #2a3140;
-    overflow-x: auto;
-  }
+  html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, Segoe UI, Arial, sans-serif; background: #1e2430; color: #e6e9ef; }
+  #tabbar { height: 46px; display: flex; align-items: stretch; background: #161b24; border-bottom: 1px solid #2a3140; overflow-x: auto; }
   #tabs { display: flex; }
-  .tab-btn {
-    padding: 0 16px;
-    display: flex;
-    align-items: center;
-    color: #b7c0d0;
-    cursor: pointer;
-    font-size: 13px;
-    border-right: 1px solid #2a3140;
-    white-space: nowrap;
-  }
+  .tab-btn { padding: 0 16px; display: flex; align-items: center; color: #b7c0d0; cursor: pointer; font-size: 13px; border-right: 1px solid #2a3140; white-space: nowrap; user-select: none; }
   .tab-btn:hover { background: #202737; }
   .tab-btn.active { background: #2e6bf2; color: #fff; }
-  #settings-btn, #fill-login-btn {
-    padding: 0 16px;
-    display: flex;
-    align-items: center;
-    color: #8b93a5;
-    cursor: pointer;
-    font-size: 13px;
-  }
-  #settings-btn:hover, #fill-login-btn:hover { color: #fff; }
-  #fill-login-btn {
-    margin-left: auto;
-    color: #7fd88f;
-    font-weight: 500;
-  }
+  .bar-btn { padding: 0 14px; display: flex; align-items: center; color: #8b93a5; cursor: pointer; font-size: 13px; white-space: nowrap; user-select: none; }
+  .bar-btn:hover { color: #fff; }
+  #expiry { margin-left: auto; padding: 0 12px; display: none; align-items: center; font-size: 12px; color: #ffcf6b; white-space: nowrap; }
+  #fill-login-btn { color: #7fd88f; font-weight: 500; }
+  #logout-btn { color: #ff9b9b; }
+  #lock { display: none; position: fixed; top: 46px; left: 0; right: 0; bottom: 0; background: #1e2430; align-items: center; justify-content: center; text-align: center; padding: 24px; }
+  #lock.show { display: flex; }
+  #lock .card { max-width: 440px; }
+  #lock h1 { font-size: 22px; margin: 0 0 10px; }
+  #lock p { color: #9aa3b5; font-size: 14px; line-height: 1.5; margin: 0 0 8px; }
+  #lock button { margin-top: 14px; background: #2e6bf2; color: #fff; border: 0; border-radius: 6px; padding: 10px 18px; font-size: 14px; cursor: pointer; }
 </style>
 </head>
 <body>
   <div id="tabbar">
     <div id="tabs"></div>
-    <div id="fill-login-btn">🔑 Fill Login</div>
-    <div id="settings-btn">⚙ Edit Tabs</div>
+    <div id="expiry"></div>
+    <div class="bar-btn" id="fill-login-btn">🔑 Fill Login</div>
+    <div class="bar-btn" id="logout-btn" title="Clear the saved session of the current tab">⏻ Log Out Tab</div>
+    <div class="bar-btn" id="settings-btn">⚙ Edit Tabs</div>
+  </div>
+  <div id="lock">
+    <div class="card">
+      <h1 id="lock-title">Access unavailable</h1>
+      <p id="lock-text"></p>
+      <p id="lock-msg"></p>
+      <button id="recheck">Check again</button>
+    </div>
   </div>
   <script src="index.js"></script>
 </body>

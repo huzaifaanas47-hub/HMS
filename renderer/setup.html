@@ -2,87 +2,47 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>HMS</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+<title>HMS Setup</title>
 <style>
   * { box-sizing: border-box; }
-  body {
-    font-family: -apple-system, Segoe UI, Arial, sans-serif;
-    background: #1e2430;
-    color: #e6e9ef;
-    margin: 0;
-    padding: 24px;
-  }
+  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; background: #1e2430; color: #e6e9ef; margin: 0; padding: 24px; }
   h1 { font-size: 18px; margin: 0 0 4px; }
-  p.sub { color: #8b93a5; font-size: 13px; margin: 0 0 20px; }
-  .row {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 10px;
-    align-items: center;
-    flex-wrap: wrap;
-    padding-bottom: 10px;
-    border-bottom: 1px solid #262d3a;
-  }
-  .row label { width: 90px; font-size: 12px; color: #8b93a5; flex-shrink: 0; }
-  .row input {
-    flex: 1;
-    min-width: 140px;
-    padding: 9px 10px;
-    border-radius: 6px;
-    border: 1px solid #333c4d;
-    background: #12161f;
-    color: #fff;
-    font-size: 13px;
-  }
-  .row input.label-input { flex: 0 0 105px; }
-  .row input.url-input { flex: 1 1 calc(100% - 145px); }
-  .row input.email-input, .row input.pass-input { flex: 1 1 45%; }
-  .field-hint { flex: 0 0 100%; font-size: 10px; color: #565d6e; margin-top: -4px; }
-  button#save {
-    margin-top: 18px;
-    background: #2e6bf2;
-    color: #fff;
-    border: none;
-    padding: 11px 20px;
-    border-radius: 6px;
-    font-size: 14px;
-    cursor: pointer;
-    width: 100%;
-  }
-  button#save:hover { background: #2559cf; }
-  button#add-tab {
-    margin-top: 6px;
-    background: transparent;
-    color: #7fa9ff;
-    border: 1px dashed #33507f;
-    padding: 10px 20px;
-    border-radius: 6px;
-    font-size: 13px;
-    cursor: pointer;
-    width: 100%;
-  }
-  button#add-tab:hover { background: #182238; }
-  .remove-btn {
-    flex: 0 0 28px;
-    background: #3a2430;
-    color: #ff8f8f;
-    border: none;
-    border-radius: 6px;
-    height: 34px;
-    cursor: pointer;
-    font-size: 14px;
-  }
-  .remove-btn:hover { background: #4a2a35; }
-  .hint { font-size: 11px; color: #6b7284; margin-top: 24px; line-height: 1.5; }
+  p.sub { color: #8b93a5; font-size: 13px; margin: 0 0 18px; line-height: 1.45; }
+  .site { background: #161b24; border: 1px solid #2a3140; border-radius: 8px; padding: 12px; margin-bottom: 18px; }
+  .site label { display: block; font-size: 12px; color: #8b93a5; margin-bottom: 6px; }
+  .site .note { font-size: 11px; color: #7fa9ff; margin-top: 6px; display: none; }
+  .row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; padding-bottom: 10px; border-bottom: 1px solid #262d3a; }
+  input { padding: 9px 10px; border-radius: 6px; border: 1px solid #333c4d; background: #12161f; color: #fff; font-size: 13px; }
+  input:disabled { opacity: .55; }
+  .site input { width: 100%; }
+  .label-input { flex: 0 0 110px; }
+  .url-input { flex: 1 1 calc(100% - 190px); }
+  .email-input, .pass-input { flex: 1 1 45%; min-width: 140px; }
+  button { font-size: 14px; cursor: pointer; border-radius: 6px; }
+  #save { margin-top: 18px; background: #2e6bf2; color: #fff; border: none; padding: 11px 20px; width: 100%; }
+  #save:hover { background: #2559cf; }
+  #add-tab { margin-top: 6px; background: transparent; color: #7fa9ff; border: 1px dashed #33507f; padding: 10px 20px; font-size: 13px; width: 100%; }
+  .remove-btn { flex: 0 0 28px; background: #3a2430; color: #ff8f8f; border: none; height: 34px; }
+  #banner { display: none; background: #3a2f1c; color: #ffcf6b; border-radius: 6px; padding: 9px 12px; font-size: 12px; margin-bottom: 14px; }
+  #error { color: #ff8f8f; font-size: 13px; margin-top: 12px; min-height: 16px; }
+  .hint { font-size: 11px; color: #6b7284; margin-top: 18px; line-height: 1.5; }
 </style>
 </head>
 <body>
-  <h1>Configure Your Role Tabs</h1>
-  <p class="sub">Give each tab a custom name and login URL. Optionally save the email/username and password for that role — it will be auto-filled into the login form (never auto-submitted, so you can review before logging in). Leave password blank to keep it unchanged.</p>
+  <h1>HMS Setup</h1>
+  <p class="sub">Set the site address, then name each tab. A tab's page can be a path such as <b>/login</b> (it follows the site address) or a full https:// address. Saved logins are filled in only on that tab's own site and never submitted automatically. Leave a password blank to keep it unchanged.</p>
+  <div id="banner">Secure password storage is not available on this computer, so passwords cannot be saved.</div>
+  <div class="site">
+    <label for="base">Site address</label>
+    <input id="base" placeholder="https://yourhospital.com">
+    <div class="note" id="managed-note">This address is managed by your administrator.</div>
+  </div>
   <div id="rows"></div>
   <button id="add-tab">+ Add Another Tab</button>
-  <button id="save">Save & Continue</button>
-  <div class="hint">You can change these later from the main window menu: File → Edit Tab URLs.</div>
+  <button id="save">Save &amp; Continue</button>
+  <div id="error"></div>
+  <div class="hint">You can reopen this screen any time from File → Edit Tabs.</div>
   <script src="setup.js"></script>
 </body>
 </html>

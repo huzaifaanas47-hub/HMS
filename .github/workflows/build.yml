@@ -26,5 +26,5 @@ jobs:
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Multi-Role-Portal-Installer
+          name: HMS-Installer
           path: dist/*.exe
