@@ -41,8 +41,6 @@ ol{margin:0;padding-left:22px}li{margin:0 0 8px;padding-left:4px}li::marker{colo
 .others{margin-top:34px;border-top:1px solid var(--line);padding-top:18px;font-size:15px}
 .others a{color:var(--brand);font-weight:600}
 .others ul{list-style:none;margin:8px 0 0;padding:0}.others li{padding:0;margin:0 0 4px}
-details{margin-top:18px;font-size:13px;color:var(--mute)}summary{cursor:pointer}
-code{font:12px Consolas,Menlo,monospace;word-break:break-all;background:#e8efed;padding:1px 5px;border-radius:4px}
 .notes{color:var(--mute);font-size:14px;margin:12px 0 0}
 </style></head><body><main>
 <h1>Download HMS</h1>
@@ -102,7 +100,4 @@ code{font:12px Consolas,Menlo,monospace;word-break:break-all;background:#e8efed;
   <?php foreach (array_slice($notes, 0, 1) as $r): ?><p class="notes">What's new in <?= $e($r['version']) ?>: <?= $e($r['notes']) ?></p><?php endforeach; ?>
 <?php endif; ?>
 
-<details><summary>Check the file (for IT staff)</summary>
-  <?php foreach (HMS_PLATFORMS as $k => $p): if ($rel[$k]): ?><p><?= $e($p['label']) ?>, <?= $e($rel[$k]['filename']) ?><br>SHA-256 <code><?= $e($rel[$k]['sha256']) ?></code></p><?php endif; endforeach; ?>
-</details>
 </main></body></html>
