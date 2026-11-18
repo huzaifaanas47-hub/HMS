@@ -316,21 +316,21 @@ function page_header(string $title, string $active = ''): void {
     $nav = ['clinics.php' => 'Clinics', 'index.php' => 'Devices', 'codes.php' => 'Codes', 'releases.php' => 'Downloads', 'settings.php' => 'Settings'];
     echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
         . '<title>' . h($title) . ' - HMS Admin</title><style>
-*{box-sizing:border-box}body{margin:0;font:14px/1.45 -apple-system,Segoe UI,Arial,sans-serif;background:#f3f5f9;color:#1c2330}
-header{background:#161b24;color:#fff;display:flex;align-items:center;gap:22px;padding:0 22px;height:52px}
-header b{font-size:16px}header a{color:#aab4c8;text-decoration:none;padding:6px 2px}header a.on,header a:hover{color:#fff}header .sp{margin-left:auto}
-main{max-width:1180px;margin:22px auto;padding:0 18px}h1{font-size:20px;margin:0 0 14px}h2{font-size:15px;margin:0 0 10px}
-.cards{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}.card{background:#fff;border:1px solid #e0e5ee;border-radius:8px;padding:12px 16px;min-width:130px}
-.card b{display:block;font-size:22px}.card span{color:#6b7587;font-size:12px}
-.box{background:#fff;border:1px solid #e0e5ee;border-radius:8px;padding:16px;margin-bottom:18px}
-table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #e0e5ee;border-radius:8px;overflow:hidden}
-th,td{text-align:left;padding:9px 11px;border-bottom:1px solid #eef1f6;font-size:13px;vertical-align:top}th{background:#f8f9fc;color:#6b7587;font-weight:600}
+*{box-sizing:border-box}body{margin:0;font:14px/1.5 Segoe UI,-apple-system,BlinkMacSystemFont,Inter,Roboto,Arial,sans-serif;background:#f1f4f9;color:#18202f;-webkit-font-smoothing:antialiased}
+header{background:#0f1420;color:#fff;display:flex;align-items:center;gap:6px;padding:0 22px;height:56px;box-shadow:0 1px 0 #263049,0 4px 14px rgba(15,20,32,.12);position:sticky;top:0;z-index:5}
+header b{font-size:16px;margin-right:18px;letter-spacing:.3px}header a{color:#9aa6bf;text-decoration:none;padding:7px 12px;border-radius:8px;font-weight:500;transition:background .12s,color .12s}header a:hover{color:#fff;background:rgba(255,255,255,.07)}header a.on{color:#fff;background:#3b82f6}header .sp{margin-left:auto}
+main{max-width:1180px;margin:26px auto;padding:0 20px}h1{font-size:22px;font-weight:700;margin:0 0 16px}h2{font-size:15px;font-weight:700;margin:0 0 12px}
+.cards{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}.card{background:#fff;border:1px solid #e2e8f2;border-radius:12px;padding:14px 18px;min-width:140px;box-shadow:0 1px 2px rgba(15,20,32,.04)}
+.card b{display:block;font-size:24px;font-weight:700}.card span{color:#6b7587;font-size:12px}
+.box{background:#fff;border:1px solid #e2e8f2;border-radius:12px;padding:20px;margin-bottom:18px;box-shadow:0 1px 2px rgba(15,20,32,.04)}
+table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid #e2e8f2;border-radius:12px;overflow:hidden;box-shadow:0 1px 2px rgba(15,20,32,.04)}tbody tr:hover td{background:#f8faff}
+th,td{text-align:left;padding:9px 11px;border-bottom:1px solid #eef1f6;font-size:13px;vertical-align:top}th{background:#f7f9fc;color:#66728a;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#c3c9d6;margin-right:6px}.dot.on{background:#27b35a}
 .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;background:#eef1f6;color:#44506a}.tag.bad{background:#fde6e6;color:#b42323}.tag.warn{background:#fff1d6;color:#92600a}.tag.ok{background:#dff5e8;color:#17703a}
-label{display:block;font-size:12px;color:#5b667a;margin:12px 0 4px}input[type=text],input[type=url],input[type=number],input[type=password],input[type=datetime-local],select,textarea{width:100%;padding:8px 10px;border:1px solid #cfd6e3;border-radius:6px;font:inherit;background:#fff}
+label{display:block;font-size:12px;color:#5b667a;margin:12px 0 4px}input[type=text],input[type=url],input[type=number],input[type=password],input[type=datetime-local],select,textarea{width:100%;padding:8px 10px;border:1px solid #cfd6e3;border-radius:8px;font:inherit;background:#fff;outline:none}input:focus,select:focus,textarea:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15)}
 textarea{min-height:70px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}@media(max-width:760px){.grid{grid-template-columns:1fr}}
-.btn{display:inline-block;background:#2e6bf2;color:#fff;border:0;border-radius:6px;padding:8px 14px;font:inherit;cursor:pointer;text-decoration:none}.btn.alt{background:#e8ecf4;color:#25324a}.btn.red{background:#d33b3b}
-.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.msg{padding:10px 14px;border-radius:6px;margin-bottom:14px}.msg.ok{background:#dff5e8;color:#17703a}.msg.err{background:#fde6e6;color:#b42323}
+.btn{display:inline-block;background:#3b82f6;color:#fff;border:0;border-radius:8px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer;text-decoration:none;transition:background .12s}.btn:hover{background:#2f6fdb}.btn.alt{background:#e8ecf4;color:#25324a}.btn.alt:hover{background:#dce2ee}.btn.red{background:#dc3f3f}.btn.red:hover{background:#c63232}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.msg{padding:11px 16px;border-radius:10px;margin-bottom:16px;font-weight:500}.msg.ok{background:#dff5e8;color:#17703a}.msg.err{background:#fde6e6;color:#b42323}
 code,.mono{font-family:Consolas,monospace;font-size:12px;background:#eef1f6;padding:2px 5px;border-radius:4px;word-break:break-all}.muted{color:#6b7587;font-size:12px}
 </style></head><body><header><b>HMS Admin</b>';
     foreach ($nav as $href => $label) echo '<a href="' . h($href) . '"' . ($active === $href ? ' class="on"' : '') . '>' . h($label) . '</a>';

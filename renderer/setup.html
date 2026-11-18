@@ -4,45 +4,69 @@
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'">
 <title>HMS Setup</title>
+<link rel="stylesheet" href="theme.css">
 <style>
-  * { box-sizing: border-box; }
-  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; background: #1e2430; color: #e6e9ef; margin: 0; padding: 24px; }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  p.sub { color: #8b93a5; font-size: 13px; margin: 0 0 18px; line-height: 1.45; }
-  .site { background: #161b24; border: 1px solid #2a3140; border-radius: 8px; padding: 12px; margin-bottom: 18px; }
-  .site label { display: block; font-size: 12px; color: #8b93a5; margin-bottom: 6px; }
-  .site .note { font-size: 11px; color: #7fa9ff; margin-top: 6px; display: none; }
-  .row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; padding-bottom: 10px; border-bottom: 1px solid #262d3a; }
-  input { padding: 9px 10px; border-radius: 6px; border: 1px solid #333c4d; background: #12161f; color: #fff; font-size: 13px; }
+  body { display: flex; flex-direction: column; height: 100vh; }
+  header { padding: 22px 28px 16px; border-bottom: 1px solid var(--border); background: var(--bg-elev); }
+  header h1 { font-size: 19px; margin: 0 0 4px; font-weight: 700; }
+  header p { color: var(--text-dim); font-size: 13px; margin: 0; line-height: 1.5; }
+  main { flex: 1; overflow-y: auto; padding: 22px 28px; }
+  footer { padding: 14px 28px; border-top: 1px solid var(--border); background: var(--bg-elev); display: flex; align-items: center; gap: 12px; }
+  #error { flex: 1; color: var(--danger); font-size: 13px; min-height: 18px; }
+
+  .section-title { font-size: 11px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; color: var(--text-faint); margin: 0 0 10px; display: flex; justify-content: space-between; align-items: center; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 14px; }
+  .card .head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .card .num { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--accent-soft); color: #7fb0ff; flex: 0 0 24px; }
+  .card .head .grow { flex: 1; font-weight: 600; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .field.full { grid-column: 1 / -1; }
+  .field label { font-size: 12px; color: var(--text-dim); font-weight: 500; }
+  input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: #fff; font-size: 13px; font-family: inherit; outline: none; transition: border-color .12s, box-shadow .12s; }
+  input::placeholder { color: var(--text-faint); }
+  input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   input:disabled { opacity: .55; }
-  .site input { width: 100%; }
-  .label-input { flex: 0 0 110px; }
-  .url-input { flex: 1 1 calc(100% - 190px); }
-  .email-input, .pass-input { flex: 1 1 45%; min-width: 140px; }
-  button { font-size: 14px; cursor: pointer; border-radius: 6px; }
-  #save { margin-top: 18px; background: #2e6bf2; color: #fff; border: none; padding: 11px 20px; width: 100%; }
-  #save:hover { background: #2559cf; }
-  #add-tab { margin-top: 6px; background: transparent; color: #7fa9ff; border: 1px dashed #33507f; padding: 10px 20px; font-size: 13px; width: 100%; }
-  .remove-btn { flex: 0 0 28px; background: #3a2430; color: #ff8f8f; border: none; height: 34px; }
-  #banner { display: none; background: #3a2f1c; color: #ffcf6b; border-radius: 6px; padding: 9px 12px; font-size: 12px; margin-bottom: 14px; }
-  #error { color: #ff8f8f; font-size: 13px; margin-top: 12px; min-height: 16px; }
-  .hint { font-size: 11px; color: #6b7284; margin-top: 18px; line-height: 1.5; }
+  .note { font-size: 12px; color: #7fb0ff; margin-top: 6px; display: none; }
+  #banner { display: none; background: rgba(251,191,36,.1); border: 1px solid rgba(251,191,36,.3); color: var(--warn); border-radius: 8px; padding: 10px 12px; font-size: 12.5px; margin-bottom: 16px; }
+
+  .btn { border: none; border-radius: 8px; padding: 10px 18px; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.primary:hover { background: var(--accent-hover); }
+  .btn.ghost { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+  .btn.ghost:hover { color: #fff; border-color: #3a4768; }
+  .btn.dashed { width: 100%; background: transparent; color: #7fb0ff; border: 1px dashed #2f4a7d; padding: 13px; font-weight: 500; }
+  .btn.dashed:hover { background: var(--accent-soft); }
+  .remove-btn { border: none; background: transparent; color: var(--text-faint); width: 28px; height: 28px; border-radius: 7px; font-size: 15px; cursor: pointer; }
+  .remove-btn:hover { background: rgba(248,113,113,.14); color: var(--danger); }
+  .hint { font-size: 12px; color: var(--text-faint); margin-top: 14px; line-height: 1.55; }
 </style>
 </head>
 <body>
-  <h1>HMS Setup</h1>
-  <p class="sub">Set the site address, then name each tab. A tab's page can be a path such as <b>/login</b> (it follows the site address) or a full https:// address. Saved logins are filled in only on that tab's own site and never submitted automatically. Leave a password blank to keep it unchanged.</p>
-  <div id="banner">Secure password storage is not available on this computer, so passwords cannot be saved.</div>
-  <div class="site">
-    <label for="base">Site address</label>
-    <input id="base" placeholder="https://yourhospital.com">
-    <div class="note" id="managed-note">This address is managed by your administrator.</div>
-  </div>
-  <div id="rows"></div>
-  <button id="add-tab">+ Add Another Tab</button>
-  <button id="save">Save &amp; Continue</button>
-  <div id="error"></div>
-  <div class="hint">You can reopen this screen any time from File → Edit Tabs.</div>
+  <header>
+    <h1>HMS Setup</h1>
+    <p>Set the site address, then add the tabs you need. A tab's page can be a path such as <b>/login</b> or a full https:// address.</p>
+  </header>
+  <main>
+    <div id="banner">Secure password storage is not available on this computer, so passwords cannot be saved.</div>
+    <div class="section-title">Site</div>
+    <div class="card">
+      <div class="field">
+        <label for="base">Site address</label>
+        <input id="base" placeholder="https://yourhospital.com">
+      </div>
+      <div class="note" id="managed-note">This address is managed by your administrator.</div>
+    </div>
+    <div class="section-title">Tabs</div>
+    <div id="rows"></div>
+    <button class="btn dashed" id="add-tab">+ Add a tab</button>
+    <div class="hint">Saved logins are filled in only on that tab's own site and are never submitted automatically. Leave a password blank to keep it unchanged. You can reopen this screen any time with the + or Tabs button.</div>
+  </main>
+  <footer>
+    <div id="error"></div>
+    <button class="btn ghost" id="cancel">Cancel</button>
+    <button class="btn primary" id="save">Save &amp; Continue</button>
+  </footer>
   <script src="setup.js"></script>
 </body>
 </html>

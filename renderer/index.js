@@ -21,13 +21,21 @@ function render(tabs) {
     const el = document.createElement('div');
     el.className = 'tab-btn';
     el.dataset.id = tab.id;
-    el.textContent = tab.label || tab.id;
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = tab.label || tab.id;
+    el.title = tab.label || tab.id;
+    el.appendChild(dot);
+    el.appendChild(name);
     el.addEventListener('click', () => { activeId = tab.id; paintActive(); window.api.switchTab(tab.id); });
     el.addEventListener('contextmenu', (e) => { e.preventDefault(); window.api.tabMenu(tab.id); });
     tabsEl.appendChild(el);
   });
   if (!tabs.some(t => t.id === activeId)) activeId = tabs[0] ? tabs[0].id : null;
   paintActive();
+  // A single tab needs no tab strip chrome beyond the one tab; keep it visible so the user sees where they are.
 }
 
 window.api.onLoadTabs(render);
@@ -61,6 +69,8 @@ window.api.onPolicyState((s) => {
 });
 
 document.getElementById('settings-btn').addEventListener('click', () => window.api.openSetup());
+document.getElementById('add-btn').addEventListener('click', () => window.api.openSetup());
+document.getElementById('reload-btn').addEventListener('click', () => { if (activeId) window.api.reloadTab(activeId); });
 document.getElementById('fill-login-btn').addEventListener('click', () => window.api.fillLogin());
 document.getElementById('logout-btn').addEventListener('click', () => { if (activeId) window.api.logoutTab(activeId); });
 document.getElementById('recheck').addEventListener('click', () => window.api.recheckPolicy());

@@ -9,6 +9,8 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -151,13 +153,11 @@ public class MainActivity extends Activity {
             }
         } catch (Exception ignored) { }
         if (tabs.isEmpty()) {
-            for (int i = 1; i <= 7; i++) { // same default as the desktop app
-                Tab t = new Tab();
-                t.id = "role" + i;
-                t.label = "Role " + i;
-                t.url = "/";
-                tabs.add(t);
-            }
+            Tab t = new Tab(); // one role by default, like the desktop app; add more with the + button
+            t.id = "role1";
+            t.label = "Main";
+            t.url = "/";
+            tabs.add(t);
             saveTabs();
         }
         activeId = tabs.get(0).id;
@@ -210,12 +210,26 @@ public class MainActivity extends Activity {
             v.setText(t.label);
             v.setTextSize(14);
             v.setGravity(Gravity.CENTER);
-            v.setPadding(dp(16), 0, dp(16), 0);
+            v.setPadding(dp(18), 0, dp(18), 0);
             v.setSingleLine(true);
+            v.setMinWidth(dp(88));
             v.setOnClickListener(x -> selectTab(t.id));
             v.setOnLongClickListener(x -> { roleOptions(t); return true; });
-            tabBar.addView(v, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(32));
+            lp.setMargins(dp(3), dp(6), dp(3), dp(6));
+            tabBar.addView(v, lp);
             t.button = v;
+        }
+        if (multiProfile && tabs.size() < MAX_TABS) {
+            TextView plus = new TextView(this);
+            plus.setText("+");
+            plus.setTextSize(20);
+            plus.setGravity(Gravity.CENTER);
+            plus.setTextColor(Color.parseColor("#9AA6BF"));
+            plus.setOnClickListener(x -> roleDialog(null));
+            LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(40), dp(32));
+            plp.setMargins(dp(3), dp(6), dp(3), dp(6));
+            tabBar.addView(plus, plp);
         }
         styleTabs();
     }
@@ -224,8 +238,12 @@ public class MainActivity extends Activity {
         for (Tab t : tabs) {
             if (t.button == null) continue;
             boolean on = t.id.equals(activeId);
-            t.button.setBackgroundColor(on ? Color.parseColor("#2E6BF2") : Color.TRANSPARENT);
-            t.button.setTextColor(on ? Color.WHITE : Color.parseColor("#B7C0D0"));
+            GradientDrawable bg = new GradientDrawable();
+            bg.setCornerRadius(dp(16));
+            bg.setColor(on ? Color.parseColor("#3B82F6") : Color.parseColor("#1A2133"));
+            t.button.setBackground(bg);
+            t.button.setTextColor(on ? Color.WHITE : Color.parseColor("#9AA6BF"));
+            t.button.setTypeface(null, on ? Typeface.BOLD : Typeface.NORMAL);
         }
     }
 
@@ -460,11 +478,11 @@ public class MainActivity extends Activity {
 
         tabScroll = new HorizontalScrollView(this);
         tabScroll.setHorizontalScrollBarEnabled(false);
-        tabScroll.setBackgroundColor(Color.parseColor("#161B24"));
+        tabScroll.setBackgroundColor(Color.parseColor("#151B2A"));
         tabBar = new LinearLayout(this);
         tabBar.setOrientation(LinearLayout.HORIZONTAL);
         tabScroll.addView(tabBar, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        column.addView(tabScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+        column.addView(tabScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
 
         FrameLayout stack = new FrameLayout(this);
         holder = new FrameLayout(this);
@@ -473,7 +491,7 @@ public class MainActivity extends Activity {
         overlay = new LinearLayout(this);
         overlay.setOrientation(LinearLayout.VERTICAL);
         overlay.setGravity(Gravity.CENTER);
-        overlay.setBackgroundColor(Color.parseColor("#1E2430"));
+        overlay.setBackgroundColor(Color.parseColor("#0F1420"));
         overlay.setPadding(dp(24), dp(24), dp(24), dp(24));
         titleView = label(22, Color.WHITE, 10);
         textView = label(15, Color.parseColor("#B7C0D0"), 8);

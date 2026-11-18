@@ -10,7 +10,7 @@ const origins = require('./src/origins');
 const { createCredentials } = require('./src/credentials');
 const { createPolicy } = require('./src/policy');
 
-const TAB_BAR_HEIGHT = 46;
+const TAB_BAR_HEIGHT = 48;
 const RENDERER_DIR = path.join(__dirname, 'renderer');
 const FALLBACK_URL = appConfig.defaultUrl || 'https://medicglobe.fun';
 const LEGACY_CONFIG_NAME = 'multirole-config'; // pre-HMS name of the config file
@@ -77,7 +77,7 @@ function migrateTabs() {
 }
 
 function defaultTabs() {
-  return Array.from({ length: 7 }, (_, i) => ({ id: `role${i + 1}`, label: `Role ${i + 1}`, url: '/' }));
+  return [{ id: 'role1', label: 'Main', url: '/' }]; // one tab by default; add more from the + button
 }
 
 function resolveTab(tab) {
@@ -371,6 +371,7 @@ function createMainWindow() {
     width: 1280,
     height: 860,
     title: 'HMS',
+    backgroundColor: '#0f1420',
     icon: path.join(__dirname, 'build', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -413,8 +414,9 @@ function sendTabs() {
 function openSetupWindow(isEdit) {
   if (setupWindow) { setupWindow.focus(); return; }
   setupWindow = new BrowserWindow({
-    width: 680,
-    height: 760,
+    width: 760,
+    height: 780,
+    backgroundColor: '#0f1420',
     title: 'HMS Setup',
     icon: path.join(__dirname, 'build', 'icon.ico'),
     parent: isEdit && mainWindow ? mainWindow : undefined,
@@ -473,6 +475,7 @@ function buildMenu() {
 onMain('switch-tab', (tabId) => { if (typeof tabId === 'string') switchTab(tabId); });
 onMain('open-setup', () => openSetupWindow(true));
 onMain('fill-login', () => { if (currentTab && views[currentTab]) autofillCredentials(views[currentTab], currentTab); });
+onMain('reload-tab', (tabId) => { if (typeof tabId === 'string' && views[tabId]) views[tabId].webContents.reload(); });
 onMain('logout-tab', (tabId) => { if (typeof tabId === 'string') confirmLogout(tabId); });
 onMain('logout-all', () => confirmLogout(null));
 onMain('recheck-policy', () => { if (policy) policy.check(); });

@@ -32,11 +32,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 ?>
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>HMS Admin - Login</title>
-<style>body{font:14px -apple-system,Segoe UI,Arial,sans-serif;background:#161b24;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
-form{background:#fff;padding:26px;border-radius:10px;width:320px}h1{font-size:19px;margin:0 0 14px}label{display:block;font-size:12px;color:#5b667a;margin:12px 0 4px}
-input{width:100%;padding:9px 10px;border:1px solid #cfd6e3;border-radius:6px;font:inherit}button{margin-top:16px;width:100%;background:#2e6bf2;color:#fff;border:0;border-radius:6px;padding:10px;font:inherit;cursor:pointer}
-.err{background:#fde6e6;color:#b42323;padding:8px 10px;border-radius:6px;margin-bottom:8px}</style></head><body>
-<form method="post" autocomplete="off"><h1>HMS Admin</h1>
+<style>body{font:14px Segoe UI,-apple-system,BlinkMacSystemFont,Inter,Arial,sans-serif;background:radial-gradient(900px 480px at 50% -10%,#17223d 0%,#0f1420 62%);display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;-webkit-font-smoothing:antialiased}
+form{background:#fff;padding:32px 30px 28px;border-radius:16px;width:360px;box-shadow:0 24px 60px rgba(0,0,0,.4)}h1{font-size:21px;font-weight:700;margin:0 0 6px;color:#18202f}
+.sub{color:#66728a;font-size:13px;margin:0 0 10px}label{display:block;font-size:12px;font-weight:600;color:#5b667a;margin:14px 0 5px}
+input{width:100%;padding:11px 12px;border:1px solid #cfd6e3;border-radius:9px;font:inherit;outline:none}input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15)}button{margin-top:20px;width:100%;background:#3b82f6;color:#fff;border:0;border-radius:9px;padding:12px;font:inherit;font-weight:600;cursor:pointer}button:hover{background:#2f6fdb}
+.err{background:#fde6e6;color:#b42323;padding:9px 12px;border-radius:8px;margin:10px 0 0}</style></head><body>
+<form method="post" autocomplete="off"><h1>HMS Admin</h1><p class="sub">Sign in to manage installs and access.</p>
 <?php if ($error): ?><div class="err"><?= h($error) ?></div><?php endif; ?>
 <?= csrf_field() ?>
 <label>Username</label><input name="username" required autofocus>

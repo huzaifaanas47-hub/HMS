@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('api', {
   openSetup: () => ipcRenderer.send('open-setup'),
   fillLogin: () => ipcRenderer.send('fill-login'),
   logoutTab: (tabId) => ipcRenderer.send('logout-tab', tabId),
+  reloadTab: (tabId) => ipcRenderer.send('reload-tab', tabId),
   logoutAll: () => ipcRenderer.send('logout-all'),
   tabMenu: (tabId) => ipcRenderer.send('tab-menu', tabId),
   recheckPolicy: () => ipcRenderer.send('recheck-policy'),
