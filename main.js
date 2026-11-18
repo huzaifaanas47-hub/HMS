@@ -232,6 +232,27 @@ function sendTabInfo(tabId) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tab-info', tabInfo(tabId));
 }
 
+// Shown INSIDE the page while it navigates, so clicking a link gives instant feedback instead of
+// a frozen-looking old page. Pure CSS via insertCSS: works under any page CSP, and is dropped
+// automatically when the new document commits.
+const LOADING_CSS = 'html::after{content:"";position:fixed;top:0;left:0;height:3px;width:40%;z-index:2147483647;pointer-events:none;' +
+  'background:linear-gradient(90deg,transparent,#3b82f6,#22d3ee,transparent);animation:hms-load 1.1s ease-in-out infinite}' +
+  'html,html *{cursor:progress!important}@keyframes hms-load{from{transform:translateX(-100%)}to{transform:translateX(260%)}}';
+
+function trackLoadingStyle(wc) {
+  let key = null;
+  const clear = () => {
+    const k = key; key = null;
+    if (k && !wc.isDestroyed()) wc.removeInsertedCSS(k).catch(() => {});
+  };
+  wc.on('did-start-navigation', (e) => {
+    if (!e.isMainFrame || e.isSameDocument || key) return;
+    wc.insertCSS(LOADING_CSS).then((k) => { key = k; if (!wc.isLoading()) clear(); }).catch(() => {});
+  });
+  wc.on('did-stop-loading', clear);
+  wc.on('did-fail-load', clear);
+}
+
 function createViewForTab(tab) {
   const partition = `persist:${tab.id}`; // isolated session per tab (cookies, localStorage, cache)
   const view = new WebContentsView({
@@ -240,6 +261,7 @@ function createViewForTab(tab) {
   view.setBackgroundColor('#ffffff');
   hardenSession(session.fromPartition(partition), partition);
   guardContents(view.webContents);
+  trackLoadingStyle(view.webContents);
   ['did-start-loading', 'did-stop-loading', 'did-navigate', 'did-navigate-in-page', 'did-fail-load'].forEach((evt) => {
     view.webContents.on(evt, () => { if (!view.webContents.isDestroyed()) sendTabInfo(tab.id); });
   });
@@ -590,6 +612,33 @@ ipcMain.handle('save-setup', (event, payload) => {
   return { ok: true, warnings };
 });
 
+/* ----------------------------------------------------------------------- updates */
+
+// Updates come from this repo's GitHub Releases (see build.publish in package.json). They download in
+// the background and install on the next restart. Skipped for `npm start`; failures never bother the user.
+function setupAutoUpdate() {
+  if (!app.isPackaged) return;
+  let autoUpdater;
+  try { ({ autoUpdater } = require('electron-updater')); } catch (e) { return; }
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on('error', (e) => console.warn('[update]', e && e.message));
+  autoUpdater.on('update-downloaded', (info) => {
+    const opts = {
+      type: 'info', buttons: ['Restart now', 'Later'], defaultId: 0, cancelId: 1, title: 'Update ready',
+      message: `HMS ${info.version} is ready to install.`,
+      detail: 'Restart to finish updating. Otherwise it installs automatically the next time you close HMS.'
+    };
+    const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    (parent ? dialog.showMessageBox(parent, opts) : dialog.showMessageBox(opts))
+      .then((r) => { if (r.response === 0) autoUpdater.quitAndInstall(); })
+      .catch(() => {});
+  });
+  const check = () => autoUpdater.checkForUpdates().catch(() => {});
+  setTimeout(check, 15000);
+  setInterval(check, 4 * 60 * 60 * 1000);
+}
+
 /* ----------------------------------------------------------------------- app */
 
 app.whenReady().then(async () => {
@@ -617,6 +666,7 @@ app.whenReady().then(async () => {
   if (!getTabs() && !locked) openSetupWindow(false);
   else createMainWindow(); // locked (e.g. waiting for an access code): the lock screen is shown first
   policy.start();
+  setupAutoUpdate();
 
   // macOS asks for camera/microphone access once; Windows uses its own privacy settings.
   if (process.platform === 'darwin') {

@@ -1,7 +1,7 @@
 {
   "name": "hms",
   "productName": "HMS",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "HMS - desktop client for the Hospital Management System",
   "main": "main.js",
   "author": "Dr.Talha",
@@ -11,14 +11,15 @@
     "build": "electron-builder",
     "build:win": "electron-builder --win nsis --publish never",
     "check": "node --check main.js && node --check preload.js && node --check src/origins.js && node --check src/credentials.js && node --check src/policy.js",
-    "build:mac": "electron-builder --mac dmg --publish never"
+    "build:mac": "electron-builder --mac --publish never -c.mac.identity=-"
   },
   "devDependencies": {
     "electron": "^45.3.3",
     "electron-builder": "^24.13.3"
   },
   "dependencies": {
-    "electron-store": "^8.2.0"
+    "electron-store": "^8.2.0",
+    "electron-updater": "^6.8.11"
   },
   "build": {
     "appId": "com.talha.HMS",
@@ -54,10 +55,16 @@
     "mac": {
       "category": "public.app-category.medical",
       "icon": "build/icon.png",
-      "identity": "-",
       "target": [
         {
           "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
           "arch": [
             "x64",
             "arm64"
@@ -68,10 +75,19 @@
       "extendInfo": {
         "NSCameraUsageDescription": "HMS pages use the camera, for example to scan or take photos.",
         "NSMicrophoneUsageDescription": "HMS pages use the microphone, for example for calls and voice notes."
-      }
+      },
+      "hardenedRuntime": true
     },
     "dmg": {
       "title": "HMS ${version}"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "huzaifaanas47-hub",
+        "repo": "HMS",
+        "releaseType": "release"
+      }
+    ]
   }
 }

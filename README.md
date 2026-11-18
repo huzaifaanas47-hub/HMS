@@ -168,3 +168,20 @@ npm start          # runs the app
 npm run check      # syntax-checks the JS
 ```
 Without `policyUrl`/`publicKey` in `app-config.json` the app runs standalone (no admin control).
+
+## Releasing updates (auto-update) and signing
+
+Installed desktop apps check GitHub Releases on start and every 4 hours, download in the background, and ask to restart.
+
+1. Bump `version` in `package.json` (e.g. `2.1.1`), commit and push.
+2. `git tag v2.1.1 && git push origin v2.1.1` — the workflow builds Windows + macOS + Android and publishes them as a Release.
+
+Signing is automatic when these repository secrets exist (Settings → Secrets and variables → Actions); without them builds still work, unsigned:
+
+| Platform | Secrets |
+|---|---|
+| Windows | `WIN_CERT_P12_BASE64` (base64 of the .pfx), `WIN_CERT_PASSWORD` |
+| macOS (needed for auto-update there) | `MAC_CERT_P12_BASE64` (Developer ID Application .p12), `MAC_CERT_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` |
+| Android | the four `ANDROID_*` secrets above |
+
+The first version with the updater must still be installed by hand once; every release after that updates itself.
