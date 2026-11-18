@@ -34,7 +34,7 @@ function db(): PDO {
 function ensure_schema(PDO $pdo): void {
     try { $v = $pdo->query("SELECT v FROM settings WHERE k = 'schema_version'")->fetchColumn(); }
     catch (Throwable $e) { return; } // not installed yet
-    if ($v === '4') return;
+    if ($v === '5') return;
     $opts = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
     $pdo->exec("CREATE TABLE IF NOT EXISTS clinics (
         id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL UNIQUE, url VARCHAR(2048) NULL,
@@ -55,7 +55,9 @@ function ensure_schema(PDO $pdo): void {
     $pdo->exec("CREATE TABLE IF NOT EXISTS enroll_attempts (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(45) NOT NULL, at DATETIME NOT NULL, KEY idx_ip (ip, at)) $opts");
     $has = (int)$pdo->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'installs' AND COLUMN_NAME = 'code_id'")->fetchColumn();
     if (!$has) $pdo->exec('ALTER TABLE installs ADD COLUMN code_id INT NULL, ADD KEY idx_code (code_id)');
-    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema_version', '4') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
+    // v5: access codes are required by default. Devices already listed keep working; only unknown devices must enter a code.
+    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('require_code', '1') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
+    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema_version', '5') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
 }
 
 function h($v): string { return htmlspecialchars((string)$v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
@@ -75,7 +77,7 @@ function clip($v, int $max): string {
 function settings(): array {
     static $s = null;
     if ($s === null) {
-        $s = ['default_url' => '', 'default_expiry_days' => '0', 'global_expires_at' => '', 'global_message' => '', 'offline_grace_days' => '14', 'require_code' => '0'];
+        $s = ['default_url' => '', 'default_expiry_days' => '0', 'global_expires_at' => '', 'global_message' => '', 'offline_grace_days' => '14', 'require_code' => '1'];
         foreach (db()->query('SELECT k, v FROM settings') as $r) $s[$r['k']] = (string)$r['v'];
     }
     return $s;

@@ -36,24 +36,53 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.webkit.ProfileStore;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.net.URI;
 import java.text.DateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * HMS on Android. Like the desktop app it shows several "roles" (tabs); every role has its own WebView profile,
+ * so each one keeps its own login, cookies and storage and several people/roles can be signed in at once.
+ */
 public class MainActivity extends Activity {
     private static final int REQ_FIRST_RUN = 100, REQ_MEDIA = 101, REQ_GEO = 102, REQ_FILE = 200;
     private static final long CHECK_EVERY_MS = 10 * 60 * 1000L;
+    private static final int MAX_TABS = 20;
+
+    private static final class Tab {
+        String id, label, url; // url: a path such as "/" or "/login", or a full https:// address
+        WebView web;
+        TextView button;
+        String profile() { return "role_" + id; }
+    }
 
     private Policy policy;
     private SharedPreferences sp;
-    private WebView web;
+    private boolean multiProfile;
+
+    private final List<Tab> tabs = new ArrayList<>();
+    private String activeId;
+    private HorizontalScrollView tabScroll;
+    private LinearLayout tabBar;
+    private FrameLayout holder; // the WebViews
     private LinearLayout overlay;
     private TextView titleView, textView, msgView, errorView;
     private EditText codeInput;
@@ -65,8 +94,8 @@ public class MainActivity extends Activity {
         @Override public void run() { refresh(); ui.postDelayed(this, CHECK_EVERY_MS); }
     };
 
-    private String loadedBase; // the site currently shown
-    private String allowedOrigin;
+    private String loadedBase;
+    private final Set<String> allowedOrigins = new HashSet<>();
     private Policy.State lastState = new Policy.State();
 
     private ValueCallback<Uri[]> fileCallback;
@@ -81,9 +110,18 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         policy = new Policy(this);
         sp = getSharedPreferences("hms", MODE_PRIVATE);
+        multiProfile = WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE);
+        loadTabs();
         buildUi();
+        rebuildTabBar();
         askAllPermissionsOnce();
         apply(policy.evaluate(), null);
+        if (!multiProfile && !sp.getBoolean("warnedProfiles", false)) {
+            sp.edit().putBoolean("warnedProfiles", true).apply();
+            new AlertDialog.Builder(this).setTitle("Update Android System WebView")
+                    .setMessage("This phone's WebView is too old to keep roles separate, so only one role works for now. Update \"Android System WebView\" in Google Play to use several roles at once.")
+                    .setPositiveButton("OK", null).show();
+        }
     }
 
     @Override protected void onResume() { super.onResume(); ui.post(ticker); }
@@ -92,8 +130,220 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (web.getVisibility() == View.VISIBLE && web.canGoBack()) web.goBack();
+        Tab t = active();
+        if (t != null && t.web != null && t.web.getVisibility() == View.VISIBLE && t.web.canGoBack()) t.web.goBack();
         else super.onBackPressed();
+    }
+
+    // ------------------------------------------------------------------ roles (tabs)
+
+    private void loadTabs() {
+        tabs.clear();
+        try {
+            JSONArray a = new JSONArray(sp.getString("tabs", "[]"));
+            for (int i = 0; i < a.length(); i++) {
+                JSONObject o = a.getJSONObject(i);
+                Tab t = new Tab();
+                t.id = o.getString("id");
+                t.label = o.getString("label");
+                t.url = o.optString("url", "/");
+                tabs.add(t);
+            }
+        } catch (Exception ignored) { }
+        if (tabs.isEmpty()) {
+            for (int i = 1; i <= 7; i++) { // same default as the desktop app
+                Tab t = new Tab();
+                t.id = "role" + i;
+                t.label = "Role " + i;
+                t.url = "/";
+                tabs.add(t);
+            }
+            saveTabs();
+        }
+        activeId = tabs.get(0).id;
+    }
+
+    private void saveTabs() {
+        try {
+            JSONArray a = new JSONArray();
+            for (Tab t : tabs) a.put(new JSONObject().put("id", t.id).put("label", t.label).put("url", t.url));
+            sp.edit().putString("tabs", a.toString()).apply();
+        } catch (Exception ignored) { }
+    }
+
+    private Tab active() {
+        for (Tab t : tabs) if (t.id.equals(activeId)) return t;
+        return null;
+    }
+
+    private String tabUrl(Tab t, String base) {
+        if (t.url.startsWith("http://") || t.url.startsWith("https://")) return t.url;
+        try { return new URI(base).resolve(t.url.startsWith("/") ? t.url : "/" + t.url).toString(); }
+        catch (Exception e) { return base; }
+    }
+
+    private void computeAllowed(String base) {
+        allowedOrigins.clear();
+        String o = originOf(base);
+        if (o != null) allowedOrigins.add(o);
+        for (Tab t : tabs) {
+            if (t.url.startsWith("http")) { String x = originOf(t.url); if (x != null) allowedOrigins.add(x); }
+        }
+    }
+
+    private void rebuildTabBar() {
+        tabBar.removeAllViews();
+        for (int i = 0; i < tabs.size(); i++) {
+            if (!multiProfile && i > 0) break; // old WebView: one role only
+            final Tab t = tabs.get(i);
+            TextView v = new TextView(this);
+            v.setText(t.label);
+            v.setTextSize(14);
+            v.setGravity(Gravity.CENTER);
+            v.setPadding(dp(16), 0, dp(16), 0);
+            v.setSingleLine(true);
+            v.setOnClickListener(x -> selectTab(t.id));
+            v.setOnLongClickListener(x -> { roleOptions(t); return true; });
+            tabBar.addView(v, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            t.button = v;
+        }
+        styleTabs();
+    }
+
+    private void styleTabs() {
+        for (Tab t : tabs) {
+            if (t.button == null) continue;
+            boolean on = t.id.equals(activeId);
+            t.button.setBackgroundColor(on ? Color.parseColor("#2E6BF2") : Color.TRANSPARENT);
+            t.button.setTextColor(on ? Color.WHITE : Color.parseColor("#B7C0D0"));
+        }
+    }
+
+    private void selectTab(String id) {
+        activeId = id;
+        styleTabs();
+        if (!"ok".equals(lastState.state) || loadedBase == null) return;
+        for (Tab t : tabs) {
+            boolean on = t.id.equals(id);
+            if (on && t.web == null) { t.web = createWebView(t); t.web.loadUrl(tabUrl(t, loadedBase)); }
+            if (t.web != null) t.web.setVisibility(on ? View.VISIBLE : View.GONE);
+        }
+        Tab a = active();
+        if (a != null && a.button != null) tabScroll.post(() -> tabScroll.smoothScrollTo(Math.max(0, a.button.getLeft() - dp(40)), 0));
+    }
+
+    private void roleOptions(final Tab t) {
+        new AlertDialog.Builder(this).setTitle(t.label)
+                .setItems(new String[]{"Rename or change page", "Log out this role", "Remove this role"}, (d, which) -> {
+                    if (which == 0) roleDialog(t);
+                    else if (which == 1) logoutRole(t);
+                    else removeRole(t);
+                }).show();
+    }
+
+    private void roleDialog(final Tab existing) {
+        if (existing == null && !multiProfile) {
+            Toast.makeText(this, "Update Android System WebView in Google Play to add more roles.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (existing == null && tabs.size() >= MAX_TABS) { Toast.makeText(this, "You can have up to " + MAX_TABS + " roles.", Toast.LENGTH_SHORT).show(); return; }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        final EditText name = new EditText(this);
+        name.setHint("Role name, e.g. Reception");
+        name.setSingleLine(true);
+        name.setText(existing != null ? existing.label : "Role " + (tabs.size() + 1));
+        final EditText page = new EditText(this);
+        page.setHint("Page: / or /login or https://...");
+        page.setSingleLine(true);
+        page.setText(existing != null ? existing.url : "/");
+        box.addView(name);
+        box.addView(page);
+        new AlertDialog.Builder(this).setTitle(existing == null ? "Add a role" : "Edit role").setView(box)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Save", (d, w) -> {
+                    String label = name.getText().toString().trim();
+                    String url = page.getText().toString().trim();
+                    if (url.isEmpty()) url = "/";
+                    if (label.isEmpty() || label.length() > 30) { Toast.makeText(this, "Enter a role name (up to 30 letters).", Toast.LENGTH_LONG).show(); return; }
+                    if (!(url.startsWith("/") || url.startsWith("https://") || url.startsWith("http://"))) {
+                        Toast.makeText(this, "The page must start with / or https://", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    if (existing != null) {
+                        boolean moved = !url.equals(existing.url);
+                        existing.label = label;
+                        existing.url = url;
+                        saveTabs();
+                        rebuildTabBar();
+                        if (loadedBase != null) computeAllowed(loadedBase);
+                        if (moved && existing.web != null && loadedBase != null) existing.web.loadUrl(tabUrl(existing, loadedBase));
+                    } else {
+                        Tab t = new Tab();
+                        t.id = "r" + System.currentTimeMillis();
+                        t.label = label;
+                        t.url = url;
+                        tabs.add(t);
+                        saveTabs();
+                        rebuildTabBar();
+                        if (loadedBase != null) computeAllowed(loadedBase);
+                        selectTab(t.id);
+                    }
+                }).show();
+    }
+
+    private void removeRole(final Tab t) {
+        if (tabs.size() <= 1) { Toast.makeText(this, "Keep at least one role.", Toast.LENGTH_SHORT).show(); return; }
+        new AlertDialog.Builder(this).setTitle("Remove " + t.label + "?")
+                .setMessage("Its saved login on this phone is deleted.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Remove", (d, w) -> {
+                    if (t.web != null) { holder.removeView(t.web); t.web.destroy(); t.web = null; }
+                    if (multiProfile) { try { ProfileStore.getInstance().deleteProfile(t.profile()); } catch (Exception ignored) { } }
+                    tabs.remove(t);
+                    if (t.id.equals(activeId)) activeId = tabs.get(0).id;
+                    saveTabs();
+                    rebuildTabBar();
+                    selectTab(activeId);
+                }).show();
+    }
+
+    private CookieManager cookies(Tab t) {
+        if (multiProfile) return ProfileStore.getInstance().getOrCreateProfile(t.profile()).getCookieManager();
+        return CookieManager.getInstance();
+    }
+
+    private void clearSession(Tab t) {
+        CookieManager cm = cookies(t);
+        cm.removeAllCookies(null);
+        cm.flush();
+        if (multiProfile) ProfileStore.getInstance().getOrCreateProfile(t.profile()).getWebStorage().deleteAllData();
+        else WebStorage.getInstance().deleteAllData();
+        if (t.web != null) t.web.clearCache(true);
+    }
+
+    private void logoutRole(final Tab t) {
+        new AlertDialog.Builder(this).setTitle("Log out " + t.label + "?")
+                .setMessage("This signs out of the HMS site for this role only.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Log out", (d, w) -> {
+                    clearSession(t);
+                    if (t.web != null && loadedBase != null) t.web.loadUrl(tabUrl(t, loadedBase));
+                }).show();
+    }
+
+    private void logoutAll() {
+        new AlertDialog.Builder(this).setTitle("Log out all roles?")
+                .setMessage("Every role is signed out on this phone.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Log out all", (d, w) -> {
+                    for (Tab t : tabs) {
+                        if (!multiProfile && t != tabs.get(0)) continue;
+                        clearSession(t);
+                        if (t.web != null && loadedBase != null) t.web.loadUrl(tabUrl(t, loadedBase));
+                    }
+                }).show();
     }
 
     // ------------------------------------------------------------------ policy
@@ -110,42 +360,47 @@ public class MainActivity extends Activity {
     private void apply(Policy.State s, String err) {
         lastState = s;
         if ("ok".equals(s.state)) {
-            overlay.setVisibility(View.GONE);
-            web.setVisibility(View.VISIBLE);
             String base = (s.baseUrl != null && !s.baseUrl.isEmpty()) ? s.baseUrl : BuildConfig.DEFAULT_URL;
-            if (base == null || base.isEmpty()) { showOverlay("No site address", "Your administrator has not set the site address yet.", null, false, false); return; }
+            if (base == null || base.isEmpty()) { lockUi("No site address", "Your administrator has not set the site address yet.", null, false, false); return; }
+            overlay.setVisibility(View.GONE);
+            tabScroll.setVisibility(View.VISIBLE);
+            holder.setVisibility(View.VISIBLE);
             if (!base.equals(loadedBase)) {
+                boolean first = loadedBase == null;
                 loadedBase = base;
-                allowedOrigin = originOf(base);
-                web.loadUrl(base);
+                computeAllowed(base);
+                if (!first) for (Tab t : tabs) if (t.web != null) t.web.loadUrl(tabUrl(t, base)); // site address changed
             }
+            selectTab(activeId);
             return;
         }
+        // Not allowed to use HMS right now: hide every role.
         loadedBase = null;
-        allowedOrigin = null;
-        web.setVisibility(View.GONE);
-        web.loadUrl("about:blank");
+        allowedOrigins.clear();
+        tabScroll.setVisibility(View.GONE);
+        holder.setVisibility(View.GONE);
+        for (Tab t : tabs) if (t.web != null) t.web.loadUrl("about:blank");
         String date = s.expiresAt > 0 ? DateFormat.getDateTimeInstance().format(new Date(s.expiresAt)) : "";
         switch (s.state) {
             case "enroll":
-                showOverlay("Enter your access code", "Your administrator gave you a code like ABCD-EFGH. You only need to enter it once.", null, true, false);
+                lockUi("Enter your access code", "Your administrator gave you a code like ABCD-EFGH. You only need to enter it once.", null, true, false);
                 break;
             case "expired":
-                showOverlay("Access has expired", s.expiresAt > 0 ? "Your access to HMS ended on " + date + "." : "Your access to HMS has ended.", s.message, false, true);
+                lockUi("Access has expired", s.expiresAt > 0 ? "Your access to HMS ended on " + date + "." : "Your access to HMS has ended.", s.message, false, true);
                 break;
             case "blocked":
-                showOverlay("Access has been disabled", "The administrator has disabled access for this device.", s.message, false, true);
+                lockUi("Access has been disabled", "The administrator has disabled access for this device.", s.message, false, true);
                 break;
             case "stale":
-                showOverlay("Verification required", "HMS has not been able to reach the administration server for too long. Connect to the internet and check again.", null, false, true);
+                lockUi("Verification required", "HMS has not been able to reach the administration server for too long. Connect to the internet and check again.", null, false, true);
                 break;
             default: // unverified: first start, no answer from the server yet
-                if (err != null) showOverlay("Cannot reach the server", "Check your internet connection and try again.", null, false, true);
-                else showOverlay("Connecting...", "Checking with the HMS server.", null, false, false);
+                if (err != null) lockUi("Cannot reach the server", "Check your internet connection and try again.", null, false, true);
+                else lockUi("Connecting...", "Checking with the HMS server.", null, false, false);
         }
     }
 
-    private void showOverlay(String title, String text, String msg, boolean askCode, boolean showRetry) {
+    private void lockUi(String title, String text, String msg, boolean askCode, boolean showRetry) {
         titleView.setText(title);
         textView.setText(text);
         msgView.setText(msg == null ? "" : msg);
@@ -190,10 +445,20 @@ public class MainActivity extends Activity {
     }
 
     private void buildUi() {
-        FrameLayout root = new FrameLayout(this);
-        web = new WebView(this);
-        root.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        setupWebView();
+        LinearLayout column = new LinearLayout(this);
+        column.setOrientation(LinearLayout.VERTICAL);
+
+        tabScroll = new HorizontalScrollView(this);
+        tabScroll.setHorizontalScrollBarEnabled(false);
+        tabScroll.setBackgroundColor(Color.parseColor("#161B24"));
+        tabBar = new LinearLayout(this);
+        tabBar.setOrientation(LinearLayout.HORIZONTAL);
+        tabScroll.addView(tabBar, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        column.addView(tabScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+
+        FrameLayout stack = new FrameLayout(this);
+        holder = new FrameLayout(this);
+        stack.addView(holder, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         overlay = new LinearLayout(this);
         overlay.setOrientation(LinearLayout.VERTICAL);
@@ -226,11 +491,21 @@ public class MainActivity extends Activity {
         overlay.addView(errorView);
         overlay.addView(joinBtn);
         overlay.addView(retryBtn);
-        root.addView(overlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        setContentView(root);
+        stack.addView(overlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        column.addView(stack, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        setContentView(column);
     }
 
-    private void setupWebView() {
+    /** One WebView per role, each in its own profile (own cookies, storage and permissions). */
+    private WebView createWebView(final Tab t) {
+        WebView web = new WebView(this);
+        if (multiProfile) {
+            ProfileStore.getInstance().getOrCreateProfile(t.profile());
+            WebViewCompat.setProfile(web, t.profile()); // must happen before the first load
+        }
+        holder.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -238,14 +513,14 @@ public class MainActivity extends Activity {
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
         s.setGeolocationEnabled(true);
-        CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
+        CookieManager cm = cookies(t);
+        cm.setAcceptCookie(true);
+        cm.setAcceptThirdPartyCookies(web, true);
 
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
-                String url = r.getUrl().toString();
-                if (isAllowed(url)) return false; // the HMS site stays inside the app
+                if (isAllowed(r.getUrl().toString())) return false; // the HMS site stays inside the app
                 try { startActivity(new Intent(Intent.ACTION_VIEW, r.getUrl())); } catch (ActivityNotFoundException ignored) { }
                 return true;
             }
@@ -287,7 +562,7 @@ public class MainActivity extends Activity {
             try {
                 DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
                 r.setMimeType(mime);
-                String cookie = CookieManager.getInstance().getCookie(url);
+                String cookie = cookies(t).getCookie(url);
                 if (cookie != null) r.addRequestHeader("Cookie", cookie);
                 r.addRequestHeader("User-Agent", ua);
                 r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
@@ -298,6 +573,7 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, "The download could not start.", Toast.LENGTH_LONG).show();
             }
         });
+        return web;
     }
 
     // ------------------------------------------------------------------ site origin + permissions
@@ -314,7 +590,7 @@ public class MainActivity extends Activity {
 
     private boolean isAllowed(String url) {
         String o = originOf(url);
-        return o != null && allowedOrigin != null && o.equals(allowedOrigin);
+        return o != null && allowedOrigins.contains(o);
     }
 
     private boolean granted(String perm) {
@@ -385,34 +661,35 @@ public class MainActivity extends Activity {
     @Override
     public boolean onCreateOptionsMenu(Menu m) {
         m.add(Menu.NONE, 1, 1, "Reload");
-        m.add(Menu.NONE, 2, 2, "Log out");
-        m.add(Menu.NONE, 3, 3, "About");
+        m.add(Menu.NONE, 2, 2, "Add a role");
+        m.add(Menu.NONE, 3, 3, "Log out this role");
+        m.add(Menu.NONE, 4, 4, "Log out all roles");
+        m.add(Menu.NONE, 5, 5, "About");
         return true;
     }
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
+        Tab a = active();
         switch (item.getItemId()) {
             case 1:
-                if (web.getVisibility() == View.VISIBLE) web.reload(); else refresh();
+                if (a != null && a.web != null && "ok".equals(lastState.state)) a.web.reload(); else refresh();
                 return true;
             case 2:
-                new AlertDialog.Builder(this).setTitle("Log out")
-                        .setMessage("This signs you out of the HMS site on this phone.")
-                        .setNegativeButton("Cancel", null)
-                        .setPositiveButton("Log out", (d, w) -> {
-                            CookieManager.getInstance().removeAllCookies(null);
-                            CookieManager.getInstance().flush();
-                            WebStorage.getInstance().deleteAllData();
-                            web.clearCache(true);
-                            if (loadedBase != null) web.loadUrl(loadedBase);
-                        }).show();
+                roleDialog(null);
                 return true;
             case 3:
+                if (a != null) logoutRole(a);
+                return true;
+            case 4:
+                logoutAll();
+                return true;
+            case 5:
                 String until = lastState.expiresAt > 0 ? DateFormat.getDateTimeInstance().format(new Date(lastState.expiresAt)) : "no end date";
                 String err = policy.getLastError();
                 new AlertDialog.Builder(this).setTitle("About HMS")
                         .setMessage("Version " + BuildConfig.VERSION_NAME + "\nSite: " + (loadedBase == null ? "-" : loadedBase)
+                                + "\nRoles: " + tabs.size() + (multiProfile ? " (separate logins)" : " (only one works: update WebView)")
                                 + "\nAccess until: " + until + "\nDevice ID: " + policy.installId
                                 + (err != null ? "\nLast server check failed: " + err : ""))
                         .setPositiveButton("OK", null).show();
