@@ -16,7 +16,7 @@ android {
         applicationId 'com.talha.hms'
         minSdk 24
         targetSdk 34
-        versionCode (System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger()
+        versionCode Integer.parseInt(System.getenv('GITHUB_RUN_NUMBER') ?: '1')
         versionName pkg.version
         buildConfigField 'String', 'POLICY_URL', "\"${cfg.policyUrl ?: ''}\""
         buildConfigField 'String', 'PUBLIC_KEY', "\"${cfg.publicKey ?: ''}\""
