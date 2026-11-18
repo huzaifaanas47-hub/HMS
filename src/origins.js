@@ -24,7 +24,17 @@ function normalizeBaseUrl(input) {
   return u.href;
 }
 
+// Folder part of the site address: "https://x.com/hims2/index.php" -> "/hims2/"; "https://x.com" -> "/".
+function baseDir(baseUrl) {
+  const b = typeof baseUrl === 'string' ? parse(baseUrl) : baseUrl;
+  if (!b) return '/';
+  const p = b.pathname || '/';
+  return p.endsWith('/') ? p : p.slice(0, p.lastIndexOf('/') + 1);
+}
+
 // Returns the form to store for a tab: "/path" (follows the base URL) or an absolute URL.
+// "/" means "the site address exactly as entered" (including a sub-folder and index.php).
+// "/login.php" means "login.php inside the site address's folder".
 function normalizeTabUrl(input, baseUrl) {
   if (typeof input !== 'string') return null;
   let s = input.trim();
@@ -37,13 +47,27 @@ function normalizeTabUrl(input, baseUrl) {
   if (!abs) return null;
   const u = new URL(abs);
   const b = parse(baseUrl);
-  if (b && u.origin === b.origin) return (u.pathname + u.search + u.hash) || '/';
+  if (b && u.origin === b.origin) {
+    if (u.pathname === b.pathname && u.search === b.search) return u.hash ? '/' + u.hash : '/';
+    const dir = baseDir(b);
+    if (u.pathname.startsWith(dir)) return '/' + u.pathname.slice(dir.length) + u.search + u.hash;
+    return abs; // same server but outside the site folder: keep it absolute
+  }
   return abs;
 }
 
 function resolveTabUrl(tabUrl, baseUrl) {
-  const u = parse(tabUrl || '/', baseUrl);
-  return u ? u.href : baseUrl;
+  const b = parse(baseUrl);
+  if (!b) return baseUrl;
+  const t = (typeof tabUrl === 'string' ? tabUrl.trim() : '') || '/';
+  if (/^https?:\/\//i.test(t)) { const a = parse(t); return a ? a.href : b.href; }
+  if (t === '/') return b.href;                       // the site address itself
+  if (t.startsWith('/') && !t.startsWith('//')) {     // inside the site address's folder
+    const u = parse(baseDir(b) + t.slice(1), b.origin);
+    return u ? u.href : b.href;
+  }
+  const u = parse(t, b.href);
+  return u ? u.href : b.href;
 }
 
 function isLocalHost(h) {
@@ -56,4 +80,4 @@ function isTrustedTransport(u) {
   return !!u && (u.protocol === 'https:' || (u.protocol === 'http:' && isLocalHost(u.hostname)));
 }
 
-module.exports = { parse, isHttp, normalizeBaseUrl, normalizeTabUrl, resolveTabUrl, isTrustedTransport };
+module.exports = { parse, isHttp, baseDir, normalizeBaseUrl, normalizeTabUrl, resolveTabUrl, isTrustedTransport };

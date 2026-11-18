@@ -176,10 +176,20 @@ public class MainActivity extends Activity {
         return null;
     }
 
+    // "/" = the site address exactly as entered (keeps a sub-folder and index.php);
+    // "/page.php" = page.php inside the site address's folder.
     private String tabUrl(Tab t, String base) {
-        if (t.url.startsWith("http://") || t.url.startsWith("https://")) return t.url;
-        try { return new URI(base).resolve(t.url.startsWith("/") ? t.url : "/" + t.url).toString(); }
-        catch (Exception e) { return base; }
+        String u = t.url == null ? "" : t.url.trim();
+        if (u.startsWith("http://") || u.startsWith("https://")) return u;
+        try {
+            URI b = new URI(base);
+            if (u.isEmpty() || u.equals("/")) return b.toString();
+            String path = b.getRawPath() == null ? "" : b.getRawPath();
+            String dir = path.substring(0, path.lastIndexOf('/') + 1);
+            if (dir.isEmpty()) dir = "/";
+            String rel = u.startsWith("/") ? u.substring(1) : u;
+            return b.getScheme() + "://" + b.getRawAuthority() + dir + rel;
+        } catch (Exception e) { return base; }
     }
 
     private void computeAllowed(String base) {
