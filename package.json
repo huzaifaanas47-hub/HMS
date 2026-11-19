@@ -1,17 +1,21 @@
 {
   "name": "hms",
   "productName": "HMS",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "HMS - desktop client for the Hospital Management System",
   "main": "main.js",
-  "author": "Dr.Talha",
+  "author": {
+    "name": "Dr.Talha",
+    "email": "huzaifaanas47@users.noreply.github.com"
+  },
   "license": "MIT",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
     "build:win": "electron-builder --win nsis --publish never",
     "check": "node --check main.js && node --check preload.js && node --check src/origins.js && node --check src/credentials.js && node --check src/policy.js",
-    "build:mac": "electron-builder --mac --publish never -c.mac.identity=-"
+    "build:mac": "electron-builder --mac --publish never -c.mac.identity=-",
+    "build:linux": "electron-builder --linux AppImage deb --publish never"
   },
   "devDependencies": {
     "electron": "^45.3.3",
@@ -88,6 +92,30 @@
         "repo": "HMS",
         "releaseType": "release"
       }
-    ]
-  }
+    ],
+    "linux": {
+      "category": "Office",
+      "icon": "build/icon.png",
+      "maintainer": "Dr.Talha <huzaifaanas47@users.noreply.github.com>",
+      "synopsis": "HMS desktop client",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "artifactName": "HMS-${version}-linux-${arch}.${ext}"
+    }
+  },
+  "homepage": "https://github.com/huzaifaanas47-hub/HMS"
 }

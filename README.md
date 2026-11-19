@@ -185,3 +185,19 @@ Signing is automatic when these repository secrets exist (Settings → Secrets a
 | Android | the four `ANDROID_*` secrets above |
 
 The first version with the updater must still be installed by hand once; every release after that updates itself.
+
+## Which download for which computer
+
+| Computer | File |
+|---|---|
+| Windows 10/11 | `HMS-Setup-<version>.exe` |
+| Mac with an Intel chip (all 2018 Macs, and anything before late 2020) | `HMS-<version>-mac-x64.dmg` |
+| Mac with Apple Silicon (M1 and newer) | `HMS-<version>-mac-arm64.dmg` |
+| Linux, Debian / Ubuntu / Mint | `HMS-<version>-linux-amd64.deb` (Intel/AMD) or `-linux-arm64.deb` (ARM) |
+| Linux, any other distro | `HMS-<version>-linux-x86_64.AppImage` or `-linux-arm64.AppImage` |
+| Android | `HMS-<version>-android.apk` |
+
+* **Mac requirement:** HMS runs on macOS 13 (Ventura) or newer. A 2018 MacBook Pro, Mac mini or iMac can be updated that far; a 2018 MacBook Air stops at Ventura, which is enough.
+* **Linux .deb:** `sudo apt install ./HMS-<version>-linux-amd64.deb`.
+* **Linux AppImage:** `chmod +x HMS-*.AppImage && ./HMS-*.AppImage`. On Ubuntu 23.10+ the system blocks Electron's sandbox for AppImages; if it does not open, run it once as
+  `./HMS-*.AppImage --no-sandbox`, or install the .deb instead (recommended there).
