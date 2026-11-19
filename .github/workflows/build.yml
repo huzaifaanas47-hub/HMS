@@ -9,46 +9,76 @@ on:
 permissions:
   contents: write
 
+env:
+  PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
+
 jobs:
+  # Creates the GitHub Release once, so the parallel build jobs don't each create their own.
+  prepare:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the release if it does not exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "HMS ${GITHUB_REF_NAME#v}" --notes ""
+
   windows:
+    needs: prepare
+    if: ${{ !cancelled() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
     runs-on: windows-latest
+    env:
+      HAS_WIN_CERT: ${{ secrets.WIN_CERT_P12_BASE64 != '' }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
 
       - name: Install dependencies
         run: npm install
 
-      # Signed automatically when the WIN_CERT_* secrets exist (base64 .pfx + its password); unsigned otherwise.
-      - name: Build Windows installer
+      # Signed when the WIN_CERT_* secrets exist (base64 .pfx + its password). The two steps are separate because an
+      # EMPTY CSC_LINK makes electron-builder fail ("not a file"), so the variables must not exist at all when unsigned.
+      - name: Build Windows installer (signed)
+        if: env.HAS_WIN_CERT == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.WIN_CERT_P12_BASE64 }}
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
-        run: npx electron-builder --win nsis --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
+        run: npx electron-builder --win nsis --publish ${{ env.PUBLISH }}
+
+      - name: Build Windows installer (unsigned)
+        if: env.HAS_WIN_CERT != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win nsis --publish ${{ env.PUBLISH }}
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
+          if-no-files-found: error
           name: HMS-Installer
           path: dist/*.exe
 
   mac:
+    needs: prepare
+    if: ${{ !cancelled() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
     runs-on: macos-latest
     env:
       HAS_MAC_CERT: ${{ secrets.MAC_CERT_P12_BASE64 != '' }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
 
@@ -66,39 +96,73 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx electron-builder --mac --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }} -c.mac.notarize=true
+        run: npx electron-builder --mac --publish ${{ env.PUBLISH }} -c.mac.notarize=true
 
       - name: Build macOS (ad-hoc, unsigned)
         if: env.HAS_MAC_CERT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --mac --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }} -c.mac.identity=-
+        run: npx electron-builder --mac --publish ${{ env.PUBLISH }} -c.mac.identity=-
 
       - name: Upload macOS artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
+          if-no-files-found: error
           name: HMS-Installer-Mac
           path: dist/*.dmg
 
-  android:
+  linux:
+    needs: prepare
+    if: ${{ !cancelled() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      # AppImage (any distro, also self-updates) + .deb (Debian/Ubuntu/Mint), for Intel/AMD (x64) and ARM (arm64).
+      - name: Build Linux packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --linux AppImage deb --x64 --arm64 --publish ${{ env.PUBLISH }}
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v6
+        with:
+          if-no-files-found: error
+          name: HMS-Installer-Linux
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+
+  android:
+    needs: prepare
+    if: ${{ !cancelled() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
           node-version: 22
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: 8.9
 
@@ -136,8 +200,9 @@ jobs:
           cp android/app/build/outputs/apk/release/*.apk "dist-android/HMS-$VER-android.apk"
 
       - name: Upload Android artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
+          if-no-files-found: error
           name: HMS-Installer-Android
           path: dist-android/*.apk
 
@@ -145,6 +210,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "HMS ${GITHUB_REF_NAME#v}" --notes ""
           gh release upload "$GITHUB_REF_NAME" dist-android/*.apk --clobber
