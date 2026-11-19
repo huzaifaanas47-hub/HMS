@@ -201,3 +201,11 @@ The first version with the updater must still be installed by hand once; every r
 * **Linux .deb:** `sudo apt install ./HMS-<version>-linux-amd64.deb`.
 * **Linux AppImage:** `chmod +x HMS-*.AppImage && ./HMS-*.AppImage`. On Ubuntu 23.10+ the system blocks Electron's sandbox for AppImages; if it does not open, run it once as
   `./HMS-*.AppImage --no-sandbox`, or install the .deb instead (recommended there).
+
+## Updates, access codes and slots (admin panel)
+
+* **Update notice:** upload the new installer or APK under **Downloads** (version higher than the one installed). Every app learns about it at its next check-in (within ~10 minutes) and shows an *Update available* button (Android: a prompt and a menu entry) that opens the download page. The notice disappears once the new version is installed. Windows and Mac builds still self-update from GitHub Releases when you push a `v*` tag.
+* **Keep one Android signing key.** Add the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. Without them each build gets a random key and Android refuses to update over the old app ("package conflict"). Back the keystore up: it can never be recreated.
+* **Updating does not ask for the code again** (same install ID). Uninstalling and reinstalling creates a new install ID: if the code is full, the new install takes over the place of a record with the same device name and platform that has been silent for over an hour.
+* **Settings, remove devices not seen for N days** frees the places of uninstalled apps automatically (0 = off).
+* Moving a device to another clinic detaches the old access code; "+days" on a code or device with no end date does nothing (set a date with Edit).

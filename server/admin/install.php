@@ -20,9 +20,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     if ($act === 'extend') {
         $days = max(1, min(3650, (int)($_POST['days'] ?? 30)));
-        $from = max(time(), utc_ts($inst['expires_at']) ?? 0);
-        $pdo->prepare('UPDATE installs SET expires_at = ? WHERE id = ?')->execute([gmdate('Y-m-d H:i:s', $from + $days * 86400), $id]);
-        flash("Access extended by $days days.");
+        $cur = utc_ts($inst['expires_at']);
+        if ($cur === null) flash('This install has no end date of its own, so there is nothing to extend. Set a date in "This PC\'s own expiry" if you want one.', 'err');
+        else {
+            $pdo->prepare('UPDATE installs SET expires_at = ? WHERE id = ?')->execute([gmdate('Y-m-d H:i:s', max(time(), $cur) + $days * 86400), $id]);
+            flash("Access extended by $days days.");
+        }
     } elseif ($act === 'expire_now') {
         $pdo->prepare('UPDATE installs SET expires_at = ? WHERE id = ?')->execute([gmdate('Y-m-d H:i:s', time() - 1), $id]);
         flash('Access ended. The app locks at its next check-in (within ~10 minutes).');
@@ -48,6 +51,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newClinic ?: null,
             $id,
         ]);
+        // The old access code only belongs to a device while the device stays in that code's clinic; otherwise the code's date and place no longer apply.
+        $pdo->prepare('UPDATE installs SET code_id = NULL WHERE id = ? AND code_id IS NOT NULL AND code_id NOT IN (SELECT id FROM enroll_codes WHERE clinic_id = ?)')->execute([$id, $newClinic]);
         flash(($joined ? 'Moved into the clinic; its expiry and URL now apply. ' : '') . 'Saved. The app picks this up at its next check-in (within ~10 minutes, or on restart).');
     }
     redirect('install.php?id=' . $id);

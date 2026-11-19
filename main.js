@@ -392,7 +392,7 @@ async function confirmForgetLogin(tabId) {
 /* ------------------------------------------------------------------- policy */
 
 function publicPolicyState(eff) {
-  return { state: eff.state, message: eff.message, expiresAt: eff.expiresAt, daysLeft: eff.daysLeft };
+  return { state: eff.state, message: eff.message, expiresAt: eff.expiresAt, daysLeft: eff.daysLeft, update: eff.update ? { version: eff.update.version, notes: eff.update.notes } : null };
 }
 
 function sendPolicyState() {
@@ -544,6 +544,11 @@ onMain('reload-tab', (tabId) => { if (typeof tabId === 'string' && views[tabId])
 onMain('logout-tab', (tabId) => { if (typeof tabId === 'string') confirmLogout(tabId); });
 onMain('logout-all', () => confirmLogout(null));
 onMain('recheck-policy', () => { if (policy) policy.check(); });
+// Opens the download page the admin server announced (signed). The renderer sends no URL: only the verified one is used.
+onMain('open-update', () => {
+  const u = policy && policy.getUpdate();
+  if (u && /^https?:\/\//i.test(u.url)) shell.openExternal(u.url).catch(() => {});
+});
 ipcMain.handle('enroll', async (event, code) => {
   if (!fromWindow(event, mainWindow)) throw new Error('Untrusted sender');
   if (!policy || typeof code !== 'string' || !code.trim() || code.length > 40) return { ok: false, error: 'Enter the code your administrator gave you.' };

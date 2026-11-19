@@ -77,7 +77,7 @@ function clip($v, int $max): string {
 function settings(): array {
     static $s = null;
     if ($s === null) {
-        $s = ['default_url' => '', 'default_expiry_days' => '0', 'global_expires_at' => '', 'global_message' => '', 'offline_grace_days' => '14', 'require_code' => '1'];
+        $s = ['default_url' => '', 'default_expiry_days' => '0', 'global_expires_at' => '', 'global_message' => '', 'offline_grace_days' => '14', 'require_code' => '1', 'stale_delete_days' => '0', 'last_cleanup' => '0'];
         foreach (db()->query('SELECT k, v FROM settings') as $r) $s[$r['k']] = (string)$r['v'];
     }
     return $s;
@@ -199,7 +199,31 @@ function effective_status(array $inst): string {
     return ($inst['status'] === 'blocked' || ($cl && $cl['status'] === 'blocked')) ? 'blocked' : 'active';
 }
 
-function build_policy(array $inst, string $nonce): array {
+/* Which uploaded build suits this device? Desktop apps report process.platform ('win32', 'darwin'); Android reports 'android'.
+   Only a build NEWER than the version the device reports is offered, so the notice disappears by itself after updating. */
+function update_info(array $inst, string $arch = ''): ?array {
+    $plat = strtolower((string)($inst['platform'] ?? ''));
+    if ($plat === 'android') { $key = 'android'; $os = 'android'; }
+    elseif ($plat === 'win32') { $key = 'windows'; $os = 'windows'; }
+    elseif ($plat === 'darwin') { $key = $arch === 'x64' ? 'mac-x64' : 'mac-arm64'; $os = 'mac'; }
+    else return null;
+    $cur = trim((string)($inst['app_version'] ?? ''));
+    $rel = release_latest($key);
+    if ($cur === '' || !$rel || version_compare((string)$rel['version'], $cur, '<=')) return null;
+    return ['version' => (string)$rel['version'], 'url' => base_dir_url() . '/download.php?os=' . $os, 'notes' => $rel['notes'] ?: null];
+}
+
+/* Devices that have not checked in for N days are removed, which frees their place on the access code (an uninstalled
+   app can never tell the server, so this is how its slot comes back). Off when the setting is 0. Runs at most once an hour. */
+function cleanup_stale_installs(): void {
+    $s = settings();
+    $days = (int)($s['stale_delete_days'] ?? 0);
+    if ($days < 1 || time() - (int)($s['last_cleanup'] ?? 0) < 3600) return;
+    setting_set('last_cleanup', (string)time());
+    db()->prepare('DELETE FROM installs WHERE last_seen IS NOT NULL AND last_seen < ?')->execute([gmdate('Y-m-d H:i:s', time() - $days * 86400)]);
+}
+
+function build_policy(array $inst, string $nonce, string $arch = ''): array {
     $s = settings();
     $cl = clinic_get($inst['clinic_id'] ?? null);
     $exp = effective_expiry($inst);
@@ -214,6 +238,7 @@ function build_policy(array $inst, string $nonce): array {
         'baseUrl' => $base !== '' ? $base : null,
         'message' => $msg,
         'offlineGraceDays' => (int)$s['offline_grace_days'],
+        'update' => update_info($inst, $arch),
         'serverTime' => time() * 1000,
     ];
 }

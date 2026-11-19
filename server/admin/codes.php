@@ -14,15 +14,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!clinic_get($cid)) flash('Choose a clinic first. Create one under Clinics if you have none.', 'err');
         elseif (trim((string)($_POST['expires_at'] ?? '')) !== '' && $exp === null) flash('That expiry date is not valid.', 'err');
         else {
-            for ($i = 0; $i < 5; $i++) {
+            $done = false;
+            for ($i = 0; $i < 5 && !$done; $i++) {
                 try {
                     $code = code_generate();
                     $pdo->prepare('INSERT INTO enroll_codes (code, clinic_id, note, max_uses, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
                         ->execute([$code, $cid, clip($_POST['note'] ?? '', 120) ?: null, $max, $exp, gmdate('Y-m-d H:i:s')]);
                     flash('Code ' . code_pretty($code) . ' created. Give it to the users together with the download link.');
-                    break;
-                } catch (PDOException $e) { /* duplicate code: try another */ }
+                    $done = true;
+                } catch (PDOException $e) {
+                    if ((string)$e->getCode() !== '23000') { flash('The code could not be saved: ' . $e->getMessage(), 'err'); $done = true; } // only a duplicate code is retried
+                }
             }
+            if (!$done) flash('Could not make a unique code. Try again.', 'err');
         }
         redirect('codes.php');
     }
@@ -35,14 +39,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         flash('Code deleted. Devices that used it keep working under their clinic, but lose the code\'s expiry date.');
     } elseif ($act === 'extend') {
         $days = max(1, min(3650, (int)($_POST['days'] ?? 30)));
-        $from = max(time(), utc_ts($row['expires_at']) ?? 0);
-        $pdo->prepare('UPDATE enroll_codes SET expires_at = ? WHERE id = ?')->execute([gmdate('Y-m-d H:i:s', $from + $days * 86400), $id]);
-        flash("Code extended by $days days. Every device that joined with it gets the new date at its next check-in.");
+        $cur = utc_ts($row['expires_at']);
+        if ($cur === null) flash('This code has no end date, so there is nothing to extend. Use Edit to set an end date if you want one.', 'err');
+        else {
+            $pdo->prepare('UPDATE enroll_codes SET expires_at = ? WHERE id = ?')->execute([gmdate('Y-m-d H:i:s', max(time(), $cur) + $days * 86400), $id]);
+            flash("Code extended by $days days. Every device that joined with it gets the new date at its next check-in.");
+        }
     } else { // save
         $exp = parse_local_input($_POST['expires_at'] ?? '');
         if (trim((string)($_POST['expires_at'] ?? '')) !== '' && $exp === null) { flash('That expiry date is not valid.', 'err'); redirect('codes.php'); }
+        $max = max(1, min(100000, (int)($_POST['max_uses'] ?? 1)));
+        $joined = $pdo->prepare('SELECT COUNT(*) FROM installs WHERE code_id = ?');
+        $joined->execute([$id]);
+        if ($max < (int)$joined->fetchColumn()) { flash('The limit cannot be lower than the ' . (int)$joined->fetchColumn() . ' devices that already joined. To stop new devices, switch off "Accept new devices" instead.', 'err'); redirect('codes.php'); }
         $pdo->prepare('UPDATE enroll_codes SET max_uses = ?, expires_at = ?, is_open = ?, note = ? WHERE id = ?')->execute([
-            max(1, min(100000, (int)($_POST['max_uses'] ?? 1))), $exp, isset($_POST['is_open']) ? 1 : 0, clip($_POST['note'] ?? '', 120) ?: null, $id]);
+            $max, $exp, isset($_POST['is_open']) ? 1 : 0, clip($_POST['note'] ?? '', 120) ?: null, $id]);
         flash('Saved. Devices that already joined follow the new date at their next check-in.');
     }
     redirect('codes.php');

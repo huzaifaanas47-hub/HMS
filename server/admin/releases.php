@@ -64,10 +64,14 @@ function resumable(string $act, string $dir): void {
     if (!preg_match('/^[0-9A-Za-z][0-9A-Za-z.+-]{0,19}$/', $version)) jerr(422, 'Enter the version, for example 2.0.0.');
     if (strtolower(pathinfo($name, PATHINFO_EXTENSION)) !== HMS_PLATFORMS[$platform]['ext']) jerr(422, HMS_PLATFORMS[$platform]['label'] . ' needs a .' . HMS_PLATFORMS[$platform]['ext'] . ' file.');
     if ($size !== $total) jerr(409, 'The file is not complete yet.', ['size' => $size]);
+    @set_time_limit(0); // hashing a big file can take a while
+    $sha = hash_file('sha256', $part); // before the move: if this is cut short, the piece stays resumable and nothing is orphaned
     $stored = bin2hex(random_bytes(16)) . '.bin';
-    if (!@rename($part, $dir . '/' . $stored)) jerr(500, 'Could not save the file on the server.');
-    db()->prepare('INSERT INTO releases (platform, version, stored, filename, size, sha256, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        ->execute([$platform, $version, $stored, $name, $total, hash_file('sha256', $dir . '/' . $stored), clip($_POST['notes'] ?? '', 500) ?: null, gmdate('Y-m-d H:i:s')]);
+    if ($sha === false || !@rename($part, $dir . '/' . $stored)) jerr(500, 'Could not save the file on the server.');
+    try {
+        db()->prepare('INSERT INTO releases (platform, version, stored, filename, size, sha256, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+            ->execute([$platform, $version, $stored, $name, $total, $sha, clip($_POST['notes'] ?? '', 500) ?: null, gmdate('Y-m-d H:i:s')]);
+    } catch (Throwable $e) { @unlink($dir . '/' . $stored); jerr(500, 'Could not record the file in the database.'); }
     flash('Uploaded ' . $name . '. It is now the download for ' . HMS_PLATFORMS[$platform]['label'] . '.');
     jok(['done' => true]);
 }

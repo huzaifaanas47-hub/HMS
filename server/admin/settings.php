@@ -28,6 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     setting_set('global_expires_at', $gexp ?? '');
     setting_set('global_message', clip($_POST['global_message'] ?? '', 500));
     setting_set('offline_grace_days', (string)max(0, min(365, (int)($_POST['offline_grace_days'] ?? 14))));
+    setting_set('stale_delete_days', (string)max(0, min(3650, (int)($_POST['stale_delete_days'] ?? 0))));
     flash('Settings saved. Every installed app picks them up at its next check-in (within ~10 minutes).');
     redirect('settings.php');
 }
@@ -46,6 +47,7 @@ page_header('Settings', 'settings.php');
     <div><label>New installs expire after N days (0 = never)</label><input type="number" name="default_expiry_days" min="0" max="3650" value="<?= h($s['default_expiry_days']) ?>"></div>
     <div><label>Global expiry (<?= h(cfg()['timezone'] ?? 'UTC') ?>) - ends access for EVERYONE at this moment</label><input type="datetime-local" name="global_expires_at" value="<?= h(input_local($s['global_expires_at'])) ?>"></div>
     <div><label>Lock the app if it cannot reach this server for N days (0 = never)</label><input type="number" name="offline_grace_days" min="0" max="365" value="<?= h($s['offline_grace_days']) ?>"></div>
+    <div><label>Remove devices not seen for N days (0 = never). Frees their place on the access code, e.g. after an uninstall</label><input type="number" name="stale_delete_days" min="0" max="3650" value="<?= h($s['stale_delete_days']) ?>"></div>
     <div><label>Message shown on the lock screen (unless an install has its own)</label><input type="text" name="global_message" value="<?= h($s['global_message']) ?>" maxlength="500"></div>
   </div>
   <div class="row"><button class="btn">Save settings</button></div>

@@ -43,4 +43,6 @@ $pdo->prepare('UPDATE installs SET device = ?, platform = ?, os_release = ?, app
 $q->execute([$installId]);
 $inst = $q->fetch();
 
-echo json_encode(sign_envelope(build_policy($inst, $nonce)), JSON_UNESCAPED_SLASHES);
+cleanup_stale_installs();
+$arch = is_array($in) && is_string($in['arch'] ?? null) ? clip($in['arch'], 12) : '';
+echo json_encode(sign_envelope(build_policy($inst, $nonce, $arch)), JSON_UNESCAPED_SLASHES);

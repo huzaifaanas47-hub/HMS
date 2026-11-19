@@ -28,6 +28,7 @@ final class Policy {
         String baseUrl;
         String message;
         long expiresAt = 0; // 0 = no expiry
+        String updateVersion, updateUrl, updateNotes; // a newer build uploaded by the admin (null = none)
     }
 
     private static final class Resp { int code; String body; }
@@ -73,6 +74,20 @@ final class Policy {
         }
     }
 
+    /** true when version a (like "2.3.0") is newer than b */
+    static boolean versionNewer(String a, String b) {
+        String[] pa = a.split("[.+-]"), pb = b.split("[.+-]");
+        for (int i = 0; i < Math.max(pa.length, pb.length); i++) {
+            int x = i < pa.length ? num(pa[i]) : 0, y = i < pb.length ? num(pb[i]) : 0;
+            if (x != y) return x > y;
+        }
+        return false;
+    }
+
+    private static int num(String s) {
+        try { return Integer.parseInt(s.trim()); } catch (Exception e) { return 0; }
+    }
+
     private static String str(JSONObject o, String k) {
         return (o.isNull(k) || !o.has(k)) ? null : o.optString(k, null);
     }
@@ -89,6 +104,15 @@ final class Policy {
         out.baseUrl = str(p, "baseUrl");
         out.message = str(p, "message");
         out.expiresAt = p.isNull("expiresAt") ? 0 : p.optLong("expiresAt", 0);
+        JSONObject up = p.optJSONObject("update"); // signed announcement of a newer build; compared here too so a cached answer stops showing it once updated
+        if (up != null) {
+            String uv = str(up, "version"), url = str(up, "url");
+            if (uv != null && url != null && (url.startsWith("https://") || url.startsWith("http://")) && versionNewer(uv, BuildConfig.VERSION_NAME)) {
+                out.updateVersion = uv;
+                out.updateUrl = url;
+                out.updateNotes = str(up, "notes");
+            }
+        }
         long grace = p.optLong("offlineGraceDays", 0);
         if (p.optBoolean("enrollRequired", false)) out.state = "enroll";
         else if ("blocked".equals(p.optString("status"))) out.state = "blocked";

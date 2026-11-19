@@ -13,8 +13,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $in = implode(',', array_fill(0, count($ids), '?'));
         if ($cid) { db()->prepare("UPDATE installs SET clinic_id = ?, expires_at = NULL, url_override = NULL WHERE id IN ($in)")->execute(array_merge([$cid], $ids)); flash(count($ids) . ' PC(s) moved into ' . clinic_get($cid)['name'] . '. The clinic expiry and URL now apply to them.'); }
         else { db()->prepare("UPDATE installs SET clinic_id = NULL WHERE id IN ($in)")->execute($ids); flash(count($ids) . ' PC(s) removed from their clinic.'); }
+        // A device keeps its access code only while it stays in that code's clinic; moved devices stop counting on, and following the dates of, their old code.
+        db()->prepare("UPDATE installs SET code_id = NULL WHERE id IN ($in) AND code_id IS NOT NULL AND code_id NOT IN (SELECT id FROM enroll_codes WHERE clinic_id = ?)")->execute(array_merge($ids, [$cid]));
     }
-    redirect('index.php' . (isset($_GET['clinic']) ? '?clinic=' . (int)$_GET['clinic'] : ''));
+    $keep = array_filter(['q' => (string)($_GET['q'] ?? ''), 'clinic' => $_GET['clinic'] ?? '', 'code' => (string)($_GET['code'] ?? '')], fn($v) => $v !== '');
+    redirect('index.php' . ($keep ? '?' . http_build_query($keep) : ''));
 }
 
 $s = settings();
@@ -39,7 +42,7 @@ $rows = $st->fetchAll();
 
 $now = time();
 $stats = ['total' => 0, 'online' => 0, 'blocked' => 0, 'expired' => 0, 'soon' => 0];
-foreach (db()->query('SELECT * FROM installs') as $r) {
+foreach (db()->query('SELECT status, clinic_id, code_id, expires_at, last_seen FROM installs') as $r) {
     $stats['total']++;
     if (($t = utc_ts($r['last_seen'])) && $now - $t < HMS_ONLINE_MINUTES * 60) $stats['online']++;
     if (effective_status($r) === 'blocked') $stats['blocked']++;
@@ -61,7 +64,7 @@ page_header('Devices', 'index.php');
 <form method="get" class="row" style="margin:0 0 12px"><input type="text" name="q" value="<?= h($q) ?>" placeholder="Search name, device, install ID or IP" style="max-width:340px">
   <select name="clinic" style="max-width:220px"><option value="">All clinics</option><option value="0"<?= $fc === 0 ? ' selected' : '' ?>>Not in a clinic</option><?php foreach (clinics_all() as $cl): ?><option value="<?= (int)$cl['id'] ?>"<?= $fc === (int)$cl['id'] ? ' selected' : '' ?>><?= h($cl['name']) ?></option><?php endforeach; ?></select>
   <button class="btn alt">Filter</button></form>
-<form method="post"><?= csrf_field() ?>
+<form method="post" action="index.php<?= $_SERVER['QUERY_STRING'] !== '' ? '?' . h($_SERVER['QUERY_STRING']) : '' ?>"><?= csrf_field() ?>
 <table>
 <tr><th style="width:26px"></th><th>PC</th><th>Clinic</th><th>System</th><th>Last seen</th><th>Access until</th><th>Site URL pushed</th><th></th></tr>
 <?php foreach ($rows as $r):
@@ -84,7 +87,7 @@ page_header('Devices', 'index.php');
 <?php endforeach; if (!$rows): ?><tr><td colspan="8" class="muted">No PCs yet. They appear here the first time the app checks in.</td></tr><?php endif; ?>
 </table>
 <div class="row"><select name="clinic_id" style="max-width:240px"><option value="0">- remove from clinic -</option><?php foreach (clinics_all() as $cl): ?><option value="<?= (int)$cl['id'] ?>"><?= h($cl['name']) ?></option><?php endforeach; ?></select>
-  <button class="btn">Move ticked PCs to this clinic</button></div>
+  <button class="btn" data-confirm="Move the ticked PCs? Their own expiry date and URL are cleared, and an access code from another clinic is detached from them.">Move ticked PCs to this clinic</button></div>
 </form>
 <p class="muted">Times shown in <?= h(cfg()['timezone'] ?? 'UTC') ?>. "Online" means checked in within the last <?= HMS_ONLINE_MINUTES ?> minutes (the app checks in every 10).</p>
 <?php page_footer();

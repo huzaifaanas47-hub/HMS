@@ -460,6 +460,7 @@ public class MainActivity extends Activity {
                 if (!first) for (Tab t : tabs) if (t.web != null) t.web.loadUrl(tabUrl(t, base)); // site address changed
             }
             selectTab(activeId);
+            maybePromptUpdate(s);
             if (!sp.getBoolean("tipLogin", false)) {
                 sp.edit().putBoolean("tipLogin", true).apply();
                 Toast.makeText(this, "Tip: long-press a role tab to save its login.", Toast.LENGTH_LONG).show();
@@ -490,6 +491,23 @@ public class MainActivity extends Activity {
                 if (err != null) lockUi("Cannot reach the server", "Check your internet connection and try again.", null, false, true);
                 else lockUi("Connecting...", "Checking with the HMS server.", null, false, false);
         }
+    }
+
+    /** A build uploaded in the admin panel is announced in the signed answer: ask once per version, and keep a menu entry. */
+    private void maybePromptUpdate(final Policy.State s) {
+        if (s.updateVersion == null || s.updateUrl == null || isFinishing()) return;
+        if (s.updateVersion.equals(sp.getString("updPrompted", ""))) return;
+        sp.edit().putString("updPrompted", s.updateVersion).apply();
+        String notes = (s.updateNotes != null && !s.updateNotes.isEmpty()) ? "\n\n" + s.updateNotes : "";
+        new AlertDialog.Builder(this).setTitle("Update available")
+                .setMessage("HMS " + s.updateVersion + " is ready to download." + notes + "\n\nInstall it over this app: your roles, saved logins and access code stay.")
+                .setPositiveButton("Download", (d, w) -> openUpdate(s.updateUrl))
+                .setNegativeButton("Later", null).show();
+    }
+
+    private void openUpdate(String url) {
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+        catch (ActivityNotFoundException e) { Toast.makeText(this, "No browser found to open the download.", Toast.LENGTH_LONG).show(); }
     }
 
     private void lockUi(String title, String text, String msg, boolean askCode, boolean showRetry) {
@@ -836,6 +854,7 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------------ menu
 
     private void fillMenu(Menu m) {
+        if (lastState.updateVersion != null && lastState.updateUrl != null) m.add(Menu.NONE, 7, 0, "Update to " + lastState.updateVersion);
         m.add(Menu.NONE, 1, 1, "Reload");
         m.add(Menu.NONE, 2, 2, "Add a role");
         m.add(Menu.NONE, 6, 3, "Role settings & saved login");
@@ -879,6 +898,9 @@ public class MainActivity extends Activity {
                 return true;
             case 6:
                 if (a != null) roleDialog(a);
+                return true;
+            case 7:
+                if (lastState.updateUrl != null) openUpdate(lastState.updateUrl);
                 return true;
             case 5:
                 String until = lastState.expiresAt > 0 ? DateFormat.getDateTimeInstance().format(new Date(lastState.expiresAt)) : "no end date";

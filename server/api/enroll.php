@@ -50,10 +50,18 @@ try {
         if (!(int)$row['is_open']) { $pdo->rollBack(); $bad(403, 'This code is no longer accepting new devices.'); }
         $n = $pdo->prepare('SELECT COUNT(*) FROM installs WHERE code_id = ?');
         $n->execute([$row['id']]);
-        if ((int)$n->fetchColumn() >= (int)$row['max_uses']) { $pdo->rollBack(); $bad(403, 'This code has reached its limit of ' . (int)$row['max_uses'] . ' devices. Ask your administrator.'); }
+        $dev = [clip($in['device'] ?? '', 120), clip($in['platform'] ?? '', 20), clip($in['osRelease'] ?? '', 60), clip($in['appVersion'] ?? '', 20)];
+        if ((int)$n->fetchColumn() >= (int)$row['max_uses']) {
+            // Full. A reinstalled app is a brand-new install ID, so its old record would block it. Take over the place of a record
+            // on this same code with the same device name and platform that has been silent for over an hour; otherwise refuse.
+            $old = $pdo->prepare('SELECT id FROM installs WHERE code_id = ? AND device = ? AND platform = ? AND install_id <> ? AND last_seen < ? ORDER BY last_seen ASC LIMIT 1');
+            $old->execute([$row['id'], $dev[0], $dev[1], $installId, gmdate('Y-m-d H:i:s', time() - 3600)]);
+            $oldId = $old->fetchColumn();
+            if ($dev[0] === '' || $oldId === false) { $pdo->rollBack(); $bad(403, 'This code has reached its limit of ' . (int)$row['max_uses'] . ' devices. Ask your administrator.'); }
+            $pdo->prepare('DELETE FROM installs WHERE id = ?')->execute([$oldId]);
+        }
     }
-
-    $dev = [clip($in['device'] ?? '', 120), clip($in['platform'] ?? '', 20), clip($in['osRelease'] ?? '', 60), clip($in['appVersion'] ?? '', 20)];
+    if (!isset($dev)) $dev = [clip($in['device'] ?? '', 120), clip($in['platform'] ?? '', 20), clip($in['osRelease'] ?? '', 60), clip($in['appVersion'] ?? '', 20)];
     if ($existing) {
         $pdo->prepare('UPDATE installs SET clinic_id = ?, code_id = ?, expires_at = NULL, url_override = NULL, device = ?, platform = ?, os_release = ?, app_version = ?, ip = ?, last_seen = ? WHERE id = ?')
             ->execute(array_merge([$row['clinic_id'], $row['id']], $dev, [$ip, $now, $existing['id']]));

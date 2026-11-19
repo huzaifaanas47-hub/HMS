@@ -27,6 +27,17 @@ function verifyEnvelope(env, key) {
   }
 }
 
+// true when version a (e.g. "2.3.0") is newer than b
+function versionNewer(a, b) {
+  const pa = String(a).split(/[.+-]/).map((x) => parseInt(x, 10) || 0);
+  const pb = String(b).split(/[.+-]/).map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d > 0;
+  }
+  return false;
+}
+
 function createPolicy({ store, config, appVersion, onChange }) {
   let key = null;
   if (config.policyUrl && config.publicKey) {
@@ -73,7 +84,7 @@ function createPolicy({ store, config, appVersion, onChange }) {
 
   // -> { state: 'ok'|'expired'|'blocked'|'stale'|'enroll'|'unverified', baseUrl, message, expiresAt, daysLeft }
   function evaluate() {
-    const out = { state: 'ok', baseUrl: null, message: null, expiresAt: null, daysLeft: null };
+    const out = { state: 'ok', baseUrl: null, message: null, expiresAt: null, daysLeft: null, update: null };
     const c = loadCached();
     if (!c) { if (active) out.state = 'unverified'; return out; } // first start: nothing is allowed until the server has answered
     if (c.invalid) { out.state = 'stale'; return out; }
@@ -82,6 +93,11 @@ function createPolicy({ store, config, appVersion, onChange }) {
     out.baseUrl = p.baseUrl || null;
     out.message = p.message || null;
     out.expiresAt = p.expiresAt || null;
+    // The signed answer may announce a newer build the admin has uploaded. Checked here as well, so a cached answer stops showing it once updated.
+    const u = p.update;
+    if (u && typeof u.version === 'string' && typeof u.url === 'string' && /^https?:\/\//i.test(u.url) && versionNewer(u.version, appVersion)) {
+      out.update = { version: u.version, url: u.url, notes: typeof u.notes === 'string' ? u.notes : null };
+    }
     if (p.expiresAt) out.daysLeft = Math.ceil((p.expiresAt - t) / DAY);
     if (p.enrollRequired) out.state = 'enroll'; // the admin server wants an access code first
     else if (p.status === 'blocked') out.state = 'blocked';
@@ -109,7 +125,7 @@ function createPolicy({ store, config, appVersion, onChange }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           installId, nonce, appVersion,
-          platform: process.platform,
+          platform: process.platform, arch: process.arch,
           device: os.hostname(),
           osRelease: os.release()
         }),
@@ -177,6 +193,7 @@ function createPolicy({ store, config, appVersion, onChange }) {
     check,
     enroll,
     evaluate,
+    getUpdate: () => evaluate().update,
     persist: () => persist(true),
     getLastError: () => lastError
   };
