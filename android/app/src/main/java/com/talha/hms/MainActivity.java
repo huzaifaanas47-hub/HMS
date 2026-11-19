@@ -10,6 +10,7 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
@@ -24,6 +25,8 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.GeolocationPermissions;
 import android.webkit.PermissionRequest;
@@ -40,6 +43,8 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -50,6 +55,8 @@ import androidx.webkit.WebViewFeature;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.net.URI;
 import java.text.DateFormat;
 import java.util.ArrayList;
@@ -77,11 +84,14 @@ public class MainActivity extends Activity {
     }
 
     private Policy policy;
+    private Credentials credentials;
+    private String autofillJs;
     private SharedPreferences sp;
     private boolean multiProfile;
 
     private final List<Tab> tabs = new ArrayList<>();
     private String activeId;
+    private LinearLayout column, topBar;
     private HorizontalScrollView tabScroll;
     private LinearLayout tabBar;
     private FrameLayout holder; // the WebViews
@@ -111,8 +121,10 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         policy = new Policy(this);
+        credentials = new Credentials(this);
         sp = getSharedPreferences("hms", MODE_PRIVATE);
         multiProfile = WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE);
+        setUpEdgeToEdge();
         loadTabs();
         buildUi();
         rebuildTabBar();
@@ -215,7 +227,7 @@ public class MainActivity extends Activity {
             v.setMinWidth(dp(88));
             v.setOnClickListener(x -> selectTab(t.id));
             v.setOnLongClickListener(x -> { roleOptions(t); return true; });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(32));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30));
             lp.setMargins(dp(3), dp(6), dp(3), dp(6));
             tabBar.addView(v, lp);
             t.button = v;
@@ -227,7 +239,7 @@ public class MainActivity extends Activity {
             plus.setGravity(Gravity.CENTER);
             plus.setTextColor(Color.parseColor("#9AA6BF"));
             plus.setOnClickListener(x -> roleDialog(null));
-            LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(40), dp(32));
+            LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(40), dp(30));
             plp.setMargins(dp(3), dp(6), dp(3), dp(6));
             tabBar.addView(plus, plp);
         }
@@ -261,11 +273,21 @@ public class MainActivity extends Activity {
     }
 
     private void roleOptions(final Tab t) {
+        final boolean hasLogin = credentials.has(t.id);
+        final List<String> items = new ArrayList<>();
+        items.add("Rename, change page or saved login");
+        items.add("Log out this role");
+        if (hasLogin) items.add("Forget saved login");
+        items.add("Remove this role");
         new AlertDialog.Builder(this).setTitle(t.label)
-                .setItems(new String[]{"Rename or change page", "Log out this role", "Remove this role"}, (d, which) -> {
+                .setItems(items.toArray(new String[0]), (d, which) -> {
+                    String what = items.get(which);
                     if (which == 0) roleDialog(t);
                     else if (which == 1) logoutRole(t);
-                    else removeRole(t);
+                    else if (what.startsWith("Forget")) {
+                        credentials.delete(t.id);
+                        Toast.makeText(this, "Saved login removed for " + t.label + ".", Toast.LENGTH_SHORT).show();
+                    } else removeRole(t);
                 }).show();
     }
 
@@ -275,9 +297,13 @@ public class MainActivity extends Activity {
             return;
         }
         if (existing == null && tabs.size() >= MAX_TABS) { Toast.makeText(this, "You can have up to " + MAX_TABS + " roles.", Toast.LENGTH_SHORT).show(); return; }
+        final Credentials.Saved saved = existing != null ? credentials.get(existing.id) : new Credentials.Saved();
+
+        ScrollView scroll = new ScrollView(this);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), 0);
+        scroll.addView(box);
         final EditText name = new EditText(this);
         name.setHint("Role name, e.g. Reception");
         name.setSingleLine(true);
@@ -286,27 +312,56 @@ public class MainActivity extends Activity {
         page.setHint("Page: / or /login or https://...");
         page.setSingleLine(true);
         page.setText(existing != null ? existing.url : "/");
+        final EditText email = new EditText(this);
+        email.setHint("Login email / username (optional)");
+        email.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        email.setSingleLine(true);
+        email.setText(saved.email);
+        final EditText pass = new EditText(this);
+        pass.setHint(saved.password.isEmpty() ? "Password (optional)" : "Password saved - leave blank to keep it");
+        pass.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        pass.setSingleLine(true);
+        if (Build.VERSION.SDK_INT >= 26) {
+            email.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+            pass.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+        }
+        TextView note = new TextView(this);
+        note.setText("The login is stored encrypted on this phone only. It is filled in on this role's login page every time the app opens, and again whenever the site signs you out.");
+        note.setTextSize(12);
+        note.setPadding(0, dp(10), 0, dp(6));
         box.addView(name);
         box.addView(page);
-        new AlertDialog.Builder(this).setTitle(existing == null ? "Add a role" : "Edit role").setView(box)
+        box.addView(email);
+        box.addView(pass);
+        box.addView(note);
+
+        new AlertDialog.Builder(this).setTitle(existing == null ? "Add a role" : "Edit role").setView(scroll)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Save", (d, w) -> {
                     String label = name.getText().toString().trim();
                     String url = page.getText().toString().trim();
+                    String em = email.getText().toString().trim();
+                    String pw = pass.getText().toString();
                     if (url.isEmpty()) url = "/";
                     if (label.isEmpty() || label.length() > 30) { Toast.makeText(this, "Enter a role name (up to 30 letters).", Toast.LENGTH_LONG).show(); return; }
                     if (!(url.startsWith("/") || url.startsWith("https://") || url.startsWith("http://"))) {
                         Toast.makeText(this, "The page must start with / or https://", Toast.LENGTH_LONG).show();
                         return;
                     }
+                    if (em.length() > 200 || pw.length() > 200) { Toast.makeText(this, "The login is too long.", Toast.LENGTH_LONG).show(); return; }
+                    boolean loginChanged = !em.equals(saved.email) || !pw.isEmpty();
                     if (existing != null) {
                         boolean moved = !url.equals(existing.url);
                         existing.label = label;
                         existing.url = url;
                         saveTabs();
+                        if (loginChanged && !credentials.save(existing.id, em, pw)) {
+                            Toast.makeText(this, "The login could not be saved securely on this phone.", Toast.LENGTH_LONG).show();
+                            loginChanged = false;
+                        }
                         rebuildTabBar();
                         if (loadedBase != null) computeAllowed(loadedBase);
-                        if (moved && existing.web != null && loadedBase != null) existing.web.loadUrl(tabUrl(existing, loadedBase));
+                        if ((moved || loginChanged) && existing.web != null && loadedBase != null) existing.web.loadUrl(tabUrl(existing, loadedBase));
                     } else {
                         Tab t = new Tab();
                         t.id = "r" + System.currentTimeMillis();
@@ -314,6 +369,9 @@ public class MainActivity extends Activity {
                         t.url = url;
                         tabs.add(t);
                         saveTabs();
+                        if ((!em.isEmpty() || !pw.isEmpty()) && !credentials.save(t.id, em, pw)) {
+                            Toast.makeText(this, "The login could not be saved securely on this phone.", Toast.LENGTH_LONG).show();
+                        }
                         rebuildTabBar();
                         if (loadedBase != null) computeAllowed(loadedBase);
                         selectTab(t.id);
@@ -324,11 +382,12 @@ public class MainActivity extends Activity {
     private void removeRole(final Tab t) {
         if (tabs.size() <= 1) { Toast.makeText(this, "Keep at least one role.", Toast.LENGTH_SHORT).show(); return; }
         new AlertDialog.Builder(this).setTitle("Remove " + t.label + "?")
-                .setMessage("Its saved login on this phone is deleted.")
+                .setMessage("Its session and saved login on this phone are deleted.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Remove", (d, w) -> {
                     if (t.web != null) { holder.removeView(t.web); t.web.destroy(); t.web = null; }
                     if (multiProfile) { try { ProfileStore.getInstance().deleteProfile(t.profile()); } catch (Exception ignored) { } }
+                    credentials.delete(t.id);
                     tabs.remove(t);
                     if (t.id.equals(activeId)) activeId = tabs.get(0).id;
                     saveTabs();
@@ -353,7 +412,7 @@ public class MainActivity extends Activity {
 
     private void logoutRole(final Tab t) {
         new AlertDialog.Builder(this).setTitle("Log out " + t.label + "?")
-                .setMessage("This signs out of the HMS site for this role only.")
+                .setMessage("This signs out of the HMS site for this role only. The saved login stays and is filled in again on the login page.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Log out", (d, w) -> {
                     clearSession(t);
@@ -391,6 +450,7 @@ public class MainActivity extends Activity {
             String base = (s.baseUrl != null && !s.baseUrl.isEmpty()) ? s.baseUrl : BuildConfig.DEFAULT_URL;
             if (base == null || base.isEmpty()) { lockUi("No site address", "Your administrator has not set the site address yet.", null, false, false); return; }
             overlay.setVisibility(View.GONE);
+            setNavBar(false);
             tabScroll.setVisibility(View.VISIBLE);
             holder.setVisibility(View.VISIBLE);
             if (!base.equals(loadedBase)) {
@@ -400,6 +460,10 @@ public class MainActivity extends Activity {
                 if (!first) for (Tab t : tabs) if (t.web != null) t.web.loadUrl(tabUrl(t, base)); // site address changed
             }
             selectTab(activeId);
+            if (!sp.getBoolean("tipLogin", false)) {
+                sp.edit().putBoolean("tipLogin", true).apply();
+                Toast.makeText(this, "Tip: long-press a role tab to save its login.", Toast.LENGTH_LONG).show();
+            }
             return;
         }
         // Not allowed to use HMS right now: hide every role.
@@ -437,6 +501,7 @@ public class MainActivity extends Activity {
         joinBtn.setVisibility(askCode ? View.VISIBLE : View.GONE);
         retryBtn.setVisibility(showRetry ? View.VISIBLE : View.GONE);
         overlay.setVisibility(View.VISIBLE);
+        setNavBar(true);
     }
 
     private void submitCode() {
@@ -459,6 +524,36 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ UI
 
+    /** Full-screen layout: no action bar, the page runs to the screen edges and the top bar sits under the status bar. */
+    private void setUpEdgeToEdge() {
+        Window w = getWindow();
+        w.setBackgroundDrawable(new ColorDrawable(Color.parseColor("#0F1420")));
+        w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+        w.setStatusBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= 28) {
+            WindowManager.LayoutParams lp = w.getAttributes();
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES; // no bars beside a camera notch in landscape
+            w.setAttributes(lp);
+        }
+        w.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
+        setNavBar(true);
+    }
+
+    /** The navigation bar blends in: white (dark icons) over the web page, dark over the lock screen. */
+    private void setNavBar(boolean dark) {
+        Window w = getWindow();
+        if (Build.VERSION.SDK_INT < 26) return; // old phones cannot draw dark icons: keep the system bar
+        w.setNavigationBarColor(dark ? Color.parseColor("#0F1420") : Color.WHITE);
+        View d = w.getDecorView();
+        int f = d.getSystemUiVisibility();
+        d.setSystemUiVisibility(dark ? (f & ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR) : (f | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR));
+    }
+
+    private int statusBarHeight() {
+        int id = getResources().getIdentifier("status_bar_height", "dimen", "android");
+        return id > 0 ? getResources().getDimensionPixelSize(id) : dp(24);
+    }
+
     private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density); }
 
     private TextView label(int sizeSp, int color, int bottomDp) {
@@ -473,16 +568,34 @@ public class MainActivity extends Activity {
     }
 
     private void buildUi() {
-        LinearLayout column = new LinearLayout(this);
+        column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
+        column.setBackgroundColor(Color.parseColor("#0F1420"));
 
+        // Slim top bar: the roles on the left, the menu on the right. It also sits under the status bar, so nothing is wasted.
+        topBar = new LinearLayout(this);
+        topBar.setOrientation(LinearLayout.HORIZONTAL);
+        topBar.setBackgroundColor(Color.parseColor("#151B2A"));
         tabScroll = new HorizontalScrollView(this);
         tabScroll.setHorizontalScrollBarEnabled(false);
-        tabScroll.setBackgroundColor(Color.parseColor("#151B2A"));
         tabBar = new LinearLayout(this);
         tabBar.setOrientation(LinearLayout.HORIZONTAL);
         tabScroll.addView(tabBar, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        column.addView(tabScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
+        topBar.addView(tabScroll, new LinearLayout.LayoutParams(0, dp(42), 1f));
+        TextView menuBtn = new TextView(this);
+        menuBtn.setText("\u22EE");
+        menuBtn.setTextSize(22);
+        menuBtn.setGravity(Gravity.CENTER);
+        menuBtn.setTextColor(Color.parseColor("#C5CDDF"));
+        menuBtn.setOnClickListener(v -> showMenu(v));
+        topBar.addView(menuBtn, new LinearLayout.LayoutParams(dp(44), dp(42)));
+        topBar.setPadding(0, statusBarHeight(), 0, 0);
+        column.addView(topBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        column.setOnApplyWindowInsetsListener((v, in) -> {
+            topBar.setPadding(0, in.getSystemWindowInsetTop(), 0, 0);
+            column.setPadding(in.getSystemWindowInsetLeft(), 0, in.getSystemWindowInsetRight(), 0);
+            return in;
+        });
 
         FrameLayout stack = new FrameLayout(this);
         holder = new FrameLayout(this);
@@ -523,11 +636,14 @@ public class MainActivity extends Activity {
 
         column.addView(stack, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(column);
+        column.requestApplyInsets();
     }
 
     /** One WebView per role, each in its own profile (own cookies, storage and permissions). */
     private WebView createWebView(final Tab t) {
         WebView web = new WebView(this);
+        web.setBackgroundColor(Color.WHITE);
+        web.setOverScrollMode(View.OVER_SCROLL_NEVER);
         if (multiProfile) {
             ProfileStore.getInstance().getOrCreateProfile(t.profile());
             WebViewCompat.setProfile(web, t.profile()); // must happen before the first load
@@ -552,6 +668,10 @@ public class MainActivity extends Activity {
                 try { startActivity(new Intent(Intent.ACTION_VIEW, r.getUrl())); } catch (ActivityNotFoundException ignored) { }
                 return true;
             }
+
+            // Every page load (app start, after a log out, any redirect to the login page) fills this role's saved login.
+            @Override
+            public void onPageFinished(WebView v, String url) { autofill(t, v, url); }
         });
 
         web.setWebChromeClient(new WebChromeClient() {
@@ -602,6 +722,35 @@ public class MainActivity extends Activity {
             }
         });
         return web;
+    }
+
+    // ------------------------------------------------------------------ saved login autofill
+
+    private String autofillScript() {
+        if (autofillJs == null) {
+            try (InputStream in = getAssets().open("autofill.js")) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                autofillJs = out.toString("UTF-8");
+            } catch (Exception e) { return null; }
+        }
+        return autofillJs;
+    }
+
+    /** Fills (never submits) the saved login - only when the page is on exactly the origin of this role, over https. */
+    private void autofill(Tab t, WebView v, String url) {
+        if (loadedBase == null || url == null || !url.startsWith("https://") || !credentials.has(t.id)) return;
+        String current = originOf(url);
+        String expected = originOf(tabUrl(t, loadedBase));
+        if (current == null || !current.equals(expected)) return;
+        Credentials.Saved s = credentials.get(t.id);
+        String js = autofillScript();
+        if (!s.any() || js == null) return;
+        v.evaluateJavascript(js.replace("__ORIGIN__", JSONObject.quote(expected))
+                .replace("__EMAIL__", JSONObject.quote(s.email))
+                .replace("__PASS__", JSONObject.quote(s.password)), null);
     }
 
     // ------------------------------------------------------------------ site origin + permissions
@@ -686,20 +835,36 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ menu
 
-    @Override
-    public boolean onCreateOptionsMenu(Menu m) {
+    private void fillMenu(Menu m) {
         m.add(Menu.NONE, 1, 1, "Reload");
         m.add(Menu.NONE, 2, 2, "Add a role");
-        m.add(Menu.NONE, 3, 3, "Log out this role");
-        m.add(Menu.NONE, 4, 4, "Log out all roles");
-        m.add(Menu.NONE, 5, 5, "About");
+        m.add(Menu.NONE, 6, 3, "Role settings & saved login");
+        m.add(Menu.NONE, 3, 4, "Log out this role");
+        m.add(Menu.NONE, 4, 5, "Log out all roles");
+        m.add(Menu.NONE, 5, 6, "About");
+    }
+
+    private void showMenu(View anchor) {
+        PopupMenu pm = new PopupMenu(this, anchor);
+        fillMenu(pm.getMenu());
+        pm.setOnMenuItemClickListener(item -> handleMenu(item.getItemId()));
+        pm.show();
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu m) {
+        fillMenu(m);
         return true;
     }
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
+        return handleMenu(item.getItemId()) || super.onOptionsItemSelected(item);
+    }
+
+    private boolean handleMenu(int id) {
         Tab a = active();
-        switch (item.getItemId()) {
+        switch (id) {
             case 1:
                 if (a != null && a.web != null && "ok".equals(lastState.state)) a.web.reload(); else refresh();
                 return true;
@@ -712,6 +877,9 @@ public class MainActivity extends Activity {
             case 4:
                 logoutAll();
                 return true;
+            case 6:
+                if (a != null) roleDialog(a);
+                return true;
             case 5:
                 String until = lastState.expiresAt > 0 ? DateFormat.getDateTimeInstance().format(new Date(lastState.expiresAt)) : "no end date";
                 String err = policy.getLastError();
@@ -723,7 +891,7 @@ public class MainActivity extends Activity {
                         .setPositiveButton("OK", null).show();
                 return true;
             default:
-                return super.onOptionsItemSelected(item);
+                return false;
         }
     }
 }
