@@ -1,5 +1,7 @@
 'use strict';
 // electron-builder configuration (kept out of package.json so it can run code).
+// Named .cjs ON PURPOSE: on Windows a file called electron-builder.js in the project folder is picked up by
+// `npx electron-builder` (PATHEXT includes .JS) and run by Windows Script Host instead of electron-builder itself.
 //
 // An EMPTY signing variable makes electron-builder treat it as a file path and fail ("WIN_CSC_LINK is not correct,
 // cannot resolve ... not a file"). CI passes the certificate secrets as empty strings when they are not set, so
