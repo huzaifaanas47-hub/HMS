@@ -493,11 +493,13 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** A build uploaded in the admin panel is announced in the signed answer: ask once per version, and keep a menu entry. */
+    /** A build uploaded in the admin panel is announced in the signed answer: ask at every app start until it is installed, and keep a menu entry. */
+    private boolean updShownThisStart = false;
+
     private void maybePromptUpdate(final Policy.State s) {
         if (s.updateVersion == null || s.updateUrl == null || isFinishing()) return;
-        if (s.updateVersion.equals(sp.getString("updPrompted", ""))) return;
-        sp.edit().putString("updPrompted", s.updateVersion).apply();
+        if (updShownThisStart) return; // once per app start (not on every 10-minute check), but again at every next start until installed
+        updShownThisStart = true;
         String notes = (s.updateNotes != null && !s.updateNotes.isEmpty()) ? "\n\n" + s.updateNotes : "";
         new AlertDialog.Builder(this).setTitle("Update available")
                 .setMessage("HMS " + s.updateVersion + " is ready to download." + notes + "\n\nInstall it over this app: your roles, saved logins and access code stay.")
