@@ -1,7 +1,7 @@
 {
   "name": "hms",
   "productName": "HMS",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "HMS - desktop client for the Hospital Management System",
   "main": "main.js",
   "author": {
@@ -24,98 +24,6 @@
   "dependencies": {
     "electron-store": "^8.2.0",
     "electron-updater": "^6.8.11"
-  },
-  "build": {
-    "appId": "com.talha.HMS",
-    "productName": "HMS",
-    "files": [
-      "main.js",
-      "preload.js",
-      "app-config.json",
-      "src/**/*",
-      "renderer/**/*",
-      "package.json"
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "build/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "HMS",
-      "include": "build/installer.nsh"
-    },
-    "artifactName": "HMS-Setup-${version}.${ext}",
-    "mac": {
-      "category": "public.app-category.medical",
-      "icon": "build/icon.png",
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
-      "artifactName": "HMS-${version}-mac-${arch}.${ext}",
-      "extendInfo": {
-        "NSCameraUsageDescription": "HMS pages use the camera, for example to scan or take photos.",
-        "NSMicrophoneUsageDescription": "HMS pages use the microphone, for example for calls and voice notes."
-      },
-      "hardenedRuntime": true
-    },
-    "dmg": {
-      "title": "HMS ${version}${arch}"
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "huzaifaanas47-hub",
-        "repo": "HMS",
-        "releaseType": "release"
-      }
-    ],
-    "linux": {
-      "category": "Office",
-      "icon": "build/icon.png",
-      "maintainer": "Dr.Talha <huzaifaanas47@users.noreply.github.com>",
-      "synopsis": "HMS desktop client",
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "deb",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
-      "artifactName": "HMS-${version}-linux-${arch}.${ext}"
-    }
   },
   "homepage": "https://github.com/huzaifaanas47-hub/HMS"
 }
