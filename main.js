@@ -421,6 +421,7 @@ function sendPolicyState() {
     } else if (!eff.notice) {
       shownNotice = null; // notice removed: a later notice with the same words shows again
     }
+    if (eff.state === 'ok') maybeStartUpdateDownload(eff.update).catch(() => {});
   }
 }
 
@@ -569,6 +570,7 @@ onMain('logout-all', () => confirmLogout(null));
 onMain('recheck-policy', () => { if (policy) policy.check(); });
 // Opens the download page the admin server announced (signed). The renderer sends no URL: only the verified one is used.
 onMain('open-update', () => {
+  if (installDownloadedUpdate()) return; // already downloaded and checked: install it
   const u = policy && policy.getUpdate();
   if (u && /^https?:\/\//i.test(u.url)) shell.openExternal(u.url).catch(() => {});
 });
@@ -639,6 +641,116 @@ ipcMain.handle('save-setup', (event, payload) => {
   else { sendTabs(); syncViews(); if (!currentTab && !locked && v.tabs.length) switchTab(v.tabs[0].id); }
   return { ok: true, warnings };
 });
+
+/* ----------------------------------------------------------------------- in-app update (from the admin server)
+   The signed check-in answer names the newest build and its SHA-256. HMS downloads it in the background, checks the hash,
+   then asks the user to install. Windows starts the installer; macOS opens the .dmg; Linux replaces the AppImage and restarts. */
+
+const https = require('https');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
+
+let updateJob = null; // { version, state: 'downloading' | 'ready' | 'failed', path, failedAt }
+let updatePromptShown = false;
+
+function updateDir() { return path.join(app.getPath('temp'), 'hms-update'); }
+
+function downloadTo(url, dest, redirects = 3) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: { 'User-Agent': 'HMS-App' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects > 0) {
+        res.resume();
+        resolve(downloadTo(new URL(res.headers.location, url).toString(), dest, redirects - 1));
+        return;
+      }
+      if (res.statusCode !== 200) { res.resume(); reject(new Error('HTTP ' + res.statusCode)); return; }
+      const out = fs.createWriteStream(dest);
+      res.pipe(out);
+      out.on('finish', () => out.close(() => resolve()));
+      out.on('error', reject);
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(60000, () => req.destroy(new Error('timeout')));
+  });
+}
+
+function sha256File(p) {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash('sha256');
+    fs.createReadStream(p).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject);
+  });
+}
+
+function promptInstallUpdate(version) {
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  const opts = {
+    type: 'info', buttons: ['Install now', 'Later'], defaultId: 0, cancelId: 1, title: 'Update ready',
+    message: `HMS ${version} has been downloaded.`,
+    detail: process.platform === 'darwin'
+      ? 'Click Install now to open it, then drag HMS to Applications to replace the old version.'
+      : 'Please install it to keep using HMS. HMS closes and starts again by itself.'
+  };
+  (parent ? dialog.showMessageBox(parent, opts) : dialog.showMessageBox(opts))
+    .then((r) => { if (r.response === 0) installDownloadedUpdate(); })
+    .catch(() => {});
+}
+
+function installDownloadedUpdate() {
+  if (!updateJob || updateJob.state !== 'ready' || !fs.existsSync(updateJob.path)) return false;
+  try {
+    if (process.platform === 'win32') {
+      spawn(updateJob.path, [], { detached: true, stdio: 'ignore' }).unref();
+      app.quit();
+    } else if (process.platform === 'darwin') {
+      shell.openPath(updateJob.path).catch(() => {});
+    } else {
+      const cur = process.env.APPIMAGE;
+      if (cur) {
+        fs.copyFileSync(updateJob.path, cur + '.new');
+        fs.chmodSync(cur + '.new', 0o755);
+        fs.renameSync(cur + '.new', cur);
+        app.relaunch({ execPath: cur });
+        app.exit(0);
+      } else {
+        shell.showItemInFolder(updateJob.path); // not an AppImage: show the file, the user installs it
+      }
+    }
+  } catch (e) {
+    console.warn('[update]', e && e.message);
+    shell.showItemInFolder(updateJob.path);
+  }
+  return true;
+}
+
+async function maybeStartUpdateDownload(u) {
+  if (!app.isPackaged) return;
+  if (!u || !u.file || !u.sha256) { updateJob = null; return; } // nothing newer (or no in-app file offered)
+  if (updateJob && updateJob.version === u.version) {
+    if (updateJob.state === 'failed' && Date.now() - updateJob.failedAt > 3600000) updateJob = null; // try again after an hour
+    else {
+      if (updateJob.state === 'ready' && !updatePromptShown) { updatePromptShown = true; promptInstallUpdate(u.version); }
+      return;
+    }
+  }
+  const ext = process.platform === 'win32' ? '.exe' : process.platform === 'darwin' ? '.dmg' : '.AppImage';
+  const dest = path.join(updateDir(), 'HMS-' + String(u.version).replace(/[^0-9A-Za-z.]/g, '_') + ext);
+  updateJob = { version: u.version, state: 'downloading', path: dest };
+  try {
+    fs.mkdirSync(updateDir(), { recursive: true });
+    for (const f of fs.readdirSync(updateDir())) { const fp = path.join(updateDir(), f); if (fp !== dest) fs.rmSync(fp, { force: true }); } // older downloads
+    if (!(fs.existsSync(dest) && (await sha256File(dest)) === u.sha256)) {
+      await downloadTo(u.file, dest);
+      if ((await sha256File(dest)) !== u.sha256) throw new Error('the downloaded file does not match its hash');
+    }
+    updateJob.state = 'ready';
+    if (!updatePromptShown) { updatePromptShown = true; promptInstallUpdate(u.version); }
+  } catch (e) {
+    try { fs.rmSync(dest, { force: true }); } catch (_) { /* ignore */ }
+    updateJob = { version: u.version, state: 'failed', failedAt: Date.now() };
+    console.warn('[update]', e && e.message); // never bothers the user; the toolbar button still opens the download page
+  }
+}
 
 /* ----------------------------------------------------------------------- updates */
 

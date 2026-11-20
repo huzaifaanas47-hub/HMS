@@ -38,6 +38,16 @@ import android.webkit.WebSettings;
 import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebResourceError;
+import android.app.DownloadManager;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.IntentFilter;
+import android.database.Cursor;
+import android.provider.Settings;
+import androidx.core.content.FileProvider;
+import java.io.File;
+import java.io.FileInputStream;
+import java.security.MessageDigest;
 import android.webkit.WebViewClient;
 import android.app.KeyguardManager;
 import android.widget.Button;
@@ -143,11 +153,21 @@ public class MainActivity extends Activity {
         }
     }
 
-    @Override protected void onResume() { super.onResume(); ui.post(ticker); enforceAppLock(); }
+    @Override protected void onResume() {
+        super.onResume();
+        ui.post(ticker);
+        enforceAppLock();
+        if (installAfterPermission && Build.VERSION.SDK_INT >= 26 && getPackageManager().canRequestPackageInstalls() && readyApk != null) { installAfterPermission = false; installApk(readyApk); }
+        else if (lastState != null && lastState.updateFile != null) startUpdateDownload(lastState); // finished while the app was closed? offer it now
+    }
     @Override protected void onStop() { super.onStop(); if (!authenticating) { leftAt = System.currentTimeMillis(); lockCanceled = false; } }
     @Override protected void onNewIntent(Intent in) { super.onNewIntent(in); setIntent(in); handleJoinIntent(in); }
     @Override protected void onPause() { super.onPause(); ui.removeCallbacks(ticker); }
-    @Override protected void onDestroy() { super.onDestroy(); io.shutdownNow(); }
+    @Override protected void onDestroy() {
+        try { if (dlReceiver != null) unregisterReceiver(dlReceiver); } catch (Exception ignored) { }
+        super.onDestroy();
+        io.shutdownNow();
+    }
 
     @Override
     public void onBackPressed() {
@@ -468,6 +488,7 @@ public class MainActivity extends Activity {
             }
             selectTab(activeId);
             maybePromptUpdate(s);
+            startUpdateDownload(s);
             maybeShowNotice(s);
             pendingJoinCode = null; // already set up: a scanned code is not needed
             if (!sp.getBoolean("tipLogin", false)) {
@@ -504,6 +525,121 @@ public class MainActivity extends Activity {
     }
 
     /** A build uploaded in the admin panel is announced in the signed answer: ask at every app start until it is installed, and keep a menu entry. */
+    // ------------------------------------------------------------------ in-app update: download in the background, then ask to install
+
+    private File readyApk;                    // a verified download of the newest version, ready to install
+    private boolean installAfterPermission = false, updPromptShownThisStart = false, updChecking = false;
+    private BroadcastReceiver dlReceiver;
+
+    private File updateFileFor(String version) {
+        File dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        return dir == null ? null : new File(dir, "HMS-" + version.replaceAll("[^0-9A-Za-z.]", "_") + ".apk");
+    }
+
+    private static String sha256(File f) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        try (FileInputStream in = new FileInputStream(f)) {
+            byte[] b = new byte[65536];
+            int n;
+            while ((n = in.read(b)) > 0) md.update(b, 0, n);
+        }
+        StringBuilder sb = new StringBuilder();
+        for (byte x : md.digest()) sb.append(String.format("%02x", x));
+        return sb.toString();
+    }
+
+    /** Called with every check-in answer: starts the download of a newer version (once), or offers the finished one. */
+    private void startUpdateDownload(final Policy.State s) {
+        try {
+            if (s.updateVersion == null || s.updateFile == null || s.updateSha == null) { readyApk = null; cleanOldUpdates(null); return; }
+            final File f = updateFileFor(s.updateVersion);
+            if (f == null) return;
+            cleanOldUpdates(f.getName());
+            if (dlReceiver == null) {
+                dlReceiver = new BroadcastReceiver() {
+                    @Override public void onReceive(Context c, Intent i) { if (lastState != null && lastState.updateFile != null) startUpdateDownload(lastState); }
+                };
+                registerReceiver(dlReceiver, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
+            }
+            DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+            if (dm == null) return;
+            long id = sp.getLong("updDlId", -1);
+            String idVer = sp.getString("updDlVer", "");
+            int status = -1;
+            if (id != -1 && idVer.equals(s.updateVersion)) {
+                Cursor c = dm.query(new DownloadManager.Query().setFilterById(id));
+                try { if (c != null && c.moveToFirst()) status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)); }
+                finally { if (c != null) c.close(); }
+            }
+            if (status == DownloadManager.STATUS_RUNNING || status == DownloadManager.STATUS_PENDING || status == DownloadManager.STATUS_PAUSED) return; // already on its way
+            if (f.isFile() && status != DownloadManager.STATUS_FAILED) { verifyAndOffer(f, s); return; } // finished now, or left from an earlier run
+            long failAt = sp.getLong("updDlFailAt", 0);
+            if (failAt != 0 && System.currentTimeMillis() - failAt < 3600000L) return; // failed lately: try again later
+            if (f.exists()) f.delete();
+            DownloadManager.Request r = new DownloadManager.Request(Uri.parse(s.updateFile));
+            r.setTitle("HMS " + s.updateVersion);
+            r.setDescription("Downloading the update");
+            r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            r.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, f.getName());
+            long nid = dm.enqueue(r);
+            sp.edit().putLong("updDlId", nid).putString("updDlVer", s.updateVersion).putLong("updDlFailAt", 0).apply();
+            Toast.makeText(this, "Downloading HMS " + s.updateVersion + " in the background...", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            sp.edit().putLong("updDlFailAt", System.currentTimeMillis()).apply(); // never bother the user; the menu entry still opens the download page
+        }
+    }
+
+    private void verifyAndOffer(final File f, final Policy.State s) {
+        if (updChecking) return;
+        updChecking = true;
+        new Thread(() -> {
+            boolean ok = false;
+            try { ok = sha256(f).equalsIgnoreCase(s.updateSha); } catch (Exception ignored) { }
+            final boolean good = ok;
+            ui.post(() -> {
+                updChecking = false;
+                if (!good) { f.delete(); sp.edit().putLong("updDlFailAt", System.currentTimeMillis()).apply(); return; } // damaged or wrong file: never install it
+                readyApk = f;
+                if (!isFinishing() && !updPromptShownThisStart) {
+                    updPromptShownThisStart = true;
+                    new AlertDialog.Builder(MainActivity.this).setTitle("Update ready")
+                            .setMessage("HMS " + s.updateVersion + " has been downloaded. Please install it to keep using HMS.")
+                            .setPositiveButton("Install", (d, w) -> installApk(f))
+                            .setNegativeButton("Later", null).show();
+                }
+            });
+        }).start();
+    }
+
+    private void installApk(File f) {
+        try {
+            if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+                installAfterPermission = true;
+                Toast.makeText(this, "Allow HMS to install updates, then come back.", Toast.LENGTH_LONG).show();
+                startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
+                return;
+            }
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".updates", f);
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(uri, "application/vnd.android.package-archive");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(i);
+        } catch (Exception e) {
+            Toast.makeText(this, "Could not start the installer. Open the download page from the menu.", Toast.LENGTH_LONG).show();
+            if (lastState.updateUrl != null) openUpdate(lastState.updateUrl);
+        }
+    }
+
+    /** Removes older downloaded updates (keeps only the file named keep; null = remove all). */
+    private void cleanOldUpdates(String keep) {
+        try {
+            File dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+            File[] list = dir == null ? null : dir.listFiles();
+            if (list == null) return;
+            for (File x : list) if (x.getName().startsWith("HMS-") && x.getName().endsWith(".apk") && !x.getName().equals(keep)) x.delete();
+        } catch (Exception ignored) { }
+    }
+
     // ------------------------------------------------------------------ app lock, join link, offline page
 
     private static final long LOCK_GRACE_MS = 60000L; // back within a minute: no question asked
@@ -639,6 +775,7 @@ public class MainActivity extends Activity {
     private boolean updShownThisStart = false;
 
     private void maybePromptUpdate(final Policy.State s) {
+        if (s.updateFile != null && s.updateSha != null) return; // the in-app download handles it
         if (s.updateVersion == null || s.updateUrl == null || isFinishing()) return;
         if (updShownThisStart) return; // once per app start (not on every 10-minute check), but again at every next start until installed
         updShownThisStart = true;
@@ -1063,7 +1200,8 @@ public class MainActivity extends Activity {
                 if (a != null) roleDialog(a);
                 return true;
             case 7:
-                if (lastState.updateUrl != null) openUpdate(lastState.updateUrl);
+                if (readyApk != null) installApk(readyApk);
+                else if (lastState.updateUrl != null) openUpdate(lastState.updateUrl);
                 return true;
             case 8:
                 toggleAppLock();

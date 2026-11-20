@@ -217,7 +217,9 @@ function update_info(array $inst, string $arch = ''): ?array {
     $cur = trim((string)($inst['app_version'] ?? ''));
     $rel = release_latest($key);
     if ($cur === '' || !$rel || version_compare((string)$rel['version'], $cur, '<=')) return null;
-    return ['version' => (string)$rel['version'], 'url' => base_dir_url() . '/download.php?os=' . $os, 'notes' => $rel['notes'] ?: null];
+    return ['version' => (string)$rel['version'], 'url' => base_dir_url() . '/download.php?os=' . $os, 'notes' => $rel['notes'] ?: null,
+        // direct file for the in-app download (the answer is signed, so the app can trust this hash and refuse a tampered file)
+        'file' => base_dir_url() . '/get.php?id=' . (int)$rel['id'], 'sha256' => strtolower((string)$rel['sha256']), 'size' => (int)$rel['size']];
 }
 
 /* Devices that have not checked in for N days are removed, which frees their place on the access code (an uninstalled

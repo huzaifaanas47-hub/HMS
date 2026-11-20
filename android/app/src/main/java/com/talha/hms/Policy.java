@@ -30,6 +30,7 @@ final class Policy {
         String notice; // admin notice for this clinic (e.g. maintenance); null = none
         long expiresAt = 0; // 0 = no expiry
         String updateVersion, updateUrl, updateNotes; // a newer build uploaded by the admin (null = none)
+        String updateFile, updateSha; // direct APK link + SHA-256 for the in-app download (null = not offered)
     }
 
     private static final class Resp { int code; String body; }
@@ -113,6 +114,11 @@ final class Policy {
                 out.updateVersion = uv;
                 out.updateUrl = url;
                 out.updateNotes = str(up, "notes");
+                String uf = str(up, "file"), us = str(up, "sha256");
+                if (uf != null && uf.startsWith("https://") && us != null && us.matches("[0-9a-fA-F]{64}")) { // in-app download
+                    out.updateFile = uf;
+                    out.updateSha = us.toLowerCase();
+                }
             }
         }
         long grace = p.optLong("offlineGraceDays", 0);

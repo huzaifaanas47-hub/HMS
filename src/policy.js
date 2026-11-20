@@ -97,7 +97,12 @@ function createPolicy({ store, config, appVersion, onChange }) {
     // The signed answer may announce a newer build the admin has uploaded. Checked here as well, so a cached answer stops showing it once updated.
     const u = p.update;
     if (u && typeof u.version === 'string' && typeof u.url === 'string' && /^https?:\/\//i.test(u.url) && versionNewer(u.version, appVersion)) {
-      out.update = { version: u.version, url: u.url, notes: typeof u.notes === 'string' ? u.notes : null };
+      out.update = {
+        version: u.version, url: u.url, notes: typeof u.notes === 'string' ? u.notes : null,
+        // direct file + SHA-256 for the in-app download (the whole answer is signed, so the hash can be trusted)
+        file: (typeof u.file === 'string' && /^https:\/\//i.test(u.file)) ? u.file : null,
+        sha256: (typeof u.sha256 === 'string' && /^[0-9a-f]{64}$/i.test(u.sha256)) ? u.sha256.toLowerCase() : null
+      };
     }
     if (p.expiresAt) out.daysLeft = Math.ceil((p.expiresAt - t) / DAY);
     if (p.enrollRequired) out.state = 'enroll'; // the admin server wants an access code first
