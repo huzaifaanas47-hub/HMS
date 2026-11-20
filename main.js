@@ -392,12 +392,23 @@ async function confirmForgetLogin(tabId) {
 /* ------------------------------------------------------------------- policy */
 
 function publicPolicyState(eff) {
-  return { state: eff.state, message: eff.message, expiresAt: eff.expiresAt, daysLeft: eff.daysLeft, update: eff.update ? { version: eff.update.version, notes: eff.update.notes } : null };
+  return { state: eff.state, message: eff.message, notice: eff.notice, expiresAt: eff.expiresAt, daysLeft: eff.daysLeft, update: eff.update ? { version: eff.update.version, notes: eff.update.notes } : null };
 }
+
+let shownNotice = null; // the notice text already shown in this run; it appears again at the next app start while the admin keeps it
 
 function sendPolicyState() {
   if (mainWindow && !mainWindow.isDestroyed() && policy) {
-    mainWindow.webContents.send('policy-state', publicPolicyState(policy.evaluate()));
+    const eff = policy.evaluate();
+    mainWindow.webContents.send('policy-state', publicPolicyState(eff));
+    if (eff.state === 'ok' && eff.notice) {
+      if (eff.notice !== shownNotice) {
+        shownNotice = eff.notice;
+        dialog.showMessageBox(mainWindow, { type: 'info', title: 'Message from your administrator', message: 'Notice', detail: eff.notice, buttons: ['OK'] }).catch(() => {});
+      }
+    } else if (!eff.notice) {
+      shownNotice = null; // notice removed: a later notice with the same words shows again
+    }
   }
 }
 

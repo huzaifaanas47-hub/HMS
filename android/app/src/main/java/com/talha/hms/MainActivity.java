@@ -461,6 +461,7 @@ public class MainActivity extends Activity {
             }
             selectTab(activeId);
             maybePromptUpdate(s);
+            maybeShowNotice(s);
             if (!sp.getBoolean("tipLogin", false)) {
                 sp.edit().putBoolean("tipLogin", true).apply();
                 Toast.makeText(this, "Tip: long-press a role tab to save its login.", Toast.LENGTH_LONG).show();
@@ -494,6 +495,16 @@ public class MainActivity extends Activity {
     }
 
     /** A build uploaded in the admin panel is announced in the signed answer: ask at every app start until it is installed, and keep a menu entry. */
+    private String noticeShown = null; // notice text already shown in this run; shown again at the next app start while the admin keeps it
+
+    private void maybeShowNotice(final Policy.State s) {
+        if (s.notice == null || s.notice.isEmpty()) { noticeShown = null; return; }
+        if (isFinishing() || s.notice.equals(noticeShown)) return;
+        noticeShown = s.notice;
+        new AlertDialog.Builder(this).setTitle("Message from your administrator")
+                .setMessage(s.notice).setPositiveButton("OK", null).show();
+    }
+
     private boolean updShownThisStart = false;
 
     private void maybePromptUpdate(final Policy.State s) {

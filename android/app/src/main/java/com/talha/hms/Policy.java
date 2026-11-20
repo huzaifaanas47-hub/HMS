@@ -27,6 +27,7 @@ final class Policy {
         String state = "ok"; // ok | expired | blocked | stale | enroll | unverified
         String baseUrl;
         String message;
+        String notice; // admin notice for this clinic (e.g. maintenance); null = none
         long expiresAt = 0; // 0 = no expiry
         String updateVersion, updateUrl, updateNotes; // a newer build uploaded by the admin (null = none)
     }
@@ -103,6 +104,7 @@ final class Policy {
         long t = now();
         out.baseUrl = str(p, "baseUrl");
         out.message = str(p, "message");
+        out.notice = str(p, "notice");
         out.expiresAt = p.isNull("expiresAt") ? 0 : p.optLong("expiresAt", 0);
         JSONObject up = p.optJSONObject("update"); // signed announcement of a newer build; compared here too so a cached answer stops showing it once updated
         if (up != null) {

@@ -29,6 +29,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($act === 'expire_now') {
         $pdo->prepare('UPDATE installs SET expires_at = ? WHERE id = ?')->execute([gmdate('Y-m-d H:i:s', time() - 1), $id]);
         flash('Access ended. The app locks at its next check-in (within ~10 minutes).');
+    } elseif ($act === 'lock') {
+        $pdo->prepare("UPDATE installs SET status = 'blocked' WHERE id = ?")->execute([$id]);
+        flash('Device locked. The app locks at its next check-in (within ~10 minutes, or when it next starts with internet).');
+    } elseif ($act === 'unlock') {
+        $pdo->prepare("UPDATE installs SET status = 'active' WHERE id = ?")->execute([$id]);
+        flash('Device unlocked. It works again at its next check-in.');
     } elseif ($act === 'no_expiry') {
         $pdo->prepare('UPDATE installs SET expires_at = NULL WHERE id = ?')->execute([$id]);
         flash('Expiry removed for this install.');
@@ -93,6 +99,8 @@ $e = effective_expiry($inst);
   <form method="post" class="row" style="margin-top:0"><?= csrf_field() ?><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="action" value="extend">
     <button class="btn alt" name="days" value="7">+7 days</button><button class="btn alt" name="days" value="30">+30 days</button><button class="btn alt" name="days" value="90">+90 days</button><button class="btn alt" name="days" value="365">+1 year</button></form>
   <form method="post" class="row"><?= csrf_field() ?><input type="hidden" name="id" value="<?= $id ?>">
+    <?php if ($inst['status'] === 'blocked'): ?><button class="btn" name="action" value="unlock">Unlock device</button>
+    <?php else: ?><button class="btn red" name="action" value="lock" data-confirm="Lock this device now?">Lock device</button><?php endif; ?>
     <button class="btn alt" name="action" value="no_expiry">Remove expiry</button>
     <button class="btn red" name="action" value="expire_now" data-confirm="Lock this install now?">Expire now</button>
     <button class="btn red" name="action" value="delete" data-confirm="Remove this install record?">Delete record</button></form>

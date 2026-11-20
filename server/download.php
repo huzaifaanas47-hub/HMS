@@ -5,8 +5,8 @@ require __DIR__ . '/lib/common.php';
 send_security_headers();
 
 $ua = (string)($_SERVER['HTTP_USER_AGENT'] ?? '');
-$os = preg_match('/Android/i', $ua) ? 'android' : (preg_match('/iPhone|iPad/i', $ua) ? 'mobile' : (preg_match('/Windows/i', $ua) ? 'windows' : (preg_match('/Macintosh|Mac OS X/i', $ua) ? 'mac' : 'other')));
-if (isset($_GET['os']) && in_array($_GET['os'], ['windows', 'mac', 'android'], true)) $os = $_GET['os'];
+$os = preg_match('/Android/i', $ua) ? 'android' : (preg_match('/iPhone|iPad/i', $ua) ? 'mobile' : (preg_match('/Windows/i', $ua) ? 'windows' : (preg_match('/Macintosh|Mac OS X/i', $ua) ? 'mac' : (preg_match('/Linux|X11/i', $ua) ? 'linux' : 'other'))));
+if (isset($_GET['os']) && in_array($_GET['os'], ['windows', 'mac', 'android', 'linux'], true)) $os = $_GET['os'];
 
 $rel = [];
 foreach (HMS_PLATFORMS as $k => $_) $rel[$k] = release_latest($k);
@@ -80,6 +80,19 @@ ol{margin:0;padding-left:22px}li{margin:0 0 8px;padding-left:4px}li::marker{colo
     <li>Finish, then open HMS from the desktop shortcut.</li>
     <li>Type your access code. You only do this once.</li>
   </ol>
+<?php elseif ($os === 'linux'): ?>
+  <p class="lead">You are on Linux. The AppImage works on any distribution. Pick the file for your processor.</p>
+  <div class="panel">
+    <?= dl_button($rel['linux-x64'], 'linux-x64', 'Linux Intel/AMD (x64)') ?>
+    <?= dl_button($rel['linux-arm64'], 'linux-arm64', 'Linux ARM (arm64)') ?>
+    <p class="hint">Not sure? Run <b>uname -m</b> in a terminal. x86_64 means Intel/AMD, aarch64 means ARM.</p>
+  </div>
+  <h2>Run on Linux</h2>
+  <ol>
+    <li>Right-click the downloaded file, open Properties, and allow it to run as a program (or run <b>chmod +x</b> on it).</li>
+    <li>Double-click it to start HMS.</li>
+    <li>Type your access code. You only do this once.</li>
+  </ol>
 <?php else: ?>
   <p class="lead">Choose the download for your computer.</p>
   <div class="panel">
@@ -87,10 +100,12 @@ ol{margin:0;padding-left:22px}li{margin:0 0 8px;padding-left:4px}li::marker{colo
     <?= dl_button($rel['mac-arm64'], 'mac-arm64', 'Mac with Apple chip') ?>
     <?= dl_button($rel['mac-x64'], 'mac-x64', 'Mac with Intel chip') ?>
     <?= dl_button($rel['android'], 'android', 'Android') ?>
+    <?= dl_button($rel['linux-x64'], 'linux-x64', 'Linux Intel/AMD (x64)') ?>
+    <?= dl_button($rel['linux-arm64'], 'linux-arm64', 'Linux ARM (arm64)') ?>
   </div>
 <?php endif; ?>
 
-<?php if (in_array($os, ['windows', 'mac', 'android'], true)): $names = ['windows' => 'Windows', 'mac' => 'Mac', 'android' => 'Android']; ?>
+<?php if (in_array($os, ['windows', 'mac', 'android', 'linux'], true)): $names = ['windows' => 'Windows', 'mac' => 'Mac', 'android' => 'Android', 'linux' => 'Linux']; ?>
 <div class="others">Using a different device?
   <?php foreach ($names as $k => $n): if ($k !== $os): ?><a href="?os=<?= $k ?>"><?= $e($n) ?></a>&nbsp; <?php endif; endforeach; ?>
 </div>

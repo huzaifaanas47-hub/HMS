@@ -53,12 +53,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($url === null) { flash('That site URL is not valid.', 'err'); redirect('clinic.php?id=' . $id); }
         if (trim((string)($_POST['expires_at'] ?? '')) !== '' && $exp === null) { flash('That expiry date is not valid.', 'err'); redirect('clinic.php?id=' . $id); }
         try {
-            $pdo->prepare('UPDATE clinics SET name = ?, status = ?, expires_at = ?, url = ?, message = ?, notes = ? WHERE id = ?')->execute([
+            $pdo->prepare('UPDATE clinics SET name = ?, status = ?, expires_at = ?, url = ?, message = ?, notice = ?, notes = ? WHERE id = ?')->execute([
                 $name,
                 ($_POST['status'] ?? '') === 'blocked' ? 'blocked' : 'active',
                 $exp,
                 $url === '' ? null : $url,
                 clip($_POST['message'] ?? '', 500) ?: null,
+                clip($_POST['notice'] ?? '', 500) ?: null,
                 utf8_cut((string)($_POST['notes'] ?? ''), 2000) ?: null,
                 $id,
             ]);
@@ -92,6 +93,7 @@ page_header('Clinic: ' . $c['name'], 'clinics.php');
     <div><label>Site URL - empty = global default</label><input type="text" name="url" value="<?= h($c['url']) ?>" placeholder="https://..."></div>
   </div>
   <label>Message shown on the lock screen</label><input type="text" name="message" value="<?= h($c['message']) ?>" maxlength="500">
+  <label>Notice to all devices of this clinic (shown inside the app, e.g. &quot;Server maintenance tonight 10 pm&quot;). Empty = no notice. Clear it when the work is done.</label><input type="text" name="notice" value="<?= h($c['notice'] ?? '') ?>" maxlength="500">
   <label>Private notes</label><textarea name="notes"><?= h($c['notes']) ?></textarea>
   <div class="row"><button class="btn">Save clinic</button></div>
 </form>

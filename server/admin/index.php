@@ -5,6 +5,31 @@ require_admin();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check();
+    $back = 'index.php' . (isset($_GET['clinic']) ? '?clinic=' . (int)$_GET['clinic'] : '');
+    $bulk = (string)($_POST['bulk'] ?? '');
+    if (isset($_POST['lock'])) { // one tap: lock or unlock a single device (e.g. a stolen laptop or phone)
+        $lid = (int)$_POST['lock'];
+        $cur = db()->prepare('SELECT status FROM installs WHERE id = ?');
+        $cur->execute([$lid]);
+        $st0 = $cur->fetchColumn();
+        if ($st0 === false) flash('Device not found.', 'err');
+        else {
+            $new = $st0 === 'blocked' ? 'active' : 'blocked';
+            db()->prepare('UPDATE installs SET status = ? WHERE id = ?')->execute([$new, $lid]);
+            flash($new === 'blocked' ? 'Device locked. The app locks at its next check-in (within ~10 minutes, or when it next starts with internet).' : 'Device unlocked. It works again at its next check-in.');
+        }
+        redirect($back);
+    }
+    if ($bulk === 'lock' || $bulk === 'unlock') { // lock or unlock all ticked devices
+        $bids = array_values(array_filter(array_map('intval', (array)($_POST['pc'] ?? []))));
+        if (!$bids) flash('Tick at least one PC.', 'err');
+        else {
+            $bin = implode(',', array_fill(0, count($bids), '?'));
+            db()->prepare("UPDATE installs SET status = ? WHERE id IN ($bin)")->execute(array_merge([$bulk === 'lock' ? 'blocked' : 'active'], $bids));
+            flash(count($bids) . ' device(s) ' . ($bulk === 'lock' ? 'locked' : 'unlocked') . '.');
+        }
+        redirect($back);
+    }
     $ids = array_values(array_filter(array_map('intval', (array)($_POST['pc'] ?? []))));
     $cid = (int)($_POST['clinic_id'] ?? 0);
     if (!$ids) flash('Tick at least one PC.', 'err');
@@ -82,12 +107,16 @@ page_header('Devices', 'index.php');
   <td><?= h(ago($r['last_seen'])) ?><br><span class="muted"><?= h(fmt_local($r['last_seen'])) ?></span></td>
   <td><?php if ($e === null): ?><span class="tag ok">no expiry</span><?php elseif ($e <= $now): ?><span class="tag bad">expired <?= h(fmt_local(gmdate('Y-m-d H:i:s', $e))) ?></span><?php else: ?><span class="tag<?= $e <= $now + 7 * 86400 ? ' warn' : '' ?>"><?= h(fmt_local(gmdate('Y-m-d H:i:s', $e))) ?></span><?php endif; ?></td>
   <td class="muted"><?= $url !== '' ? h($url) : 'installer default' ?><?= $r['url_override'] ? ' <span class="tag">override</span>' : '' ?></td>
-  <td><a class="btn alt" href="install.php?id=<?= (int)$r['id'] ?>">Manage</a></td>
+  <td style="white-space:nowrap"><a class="btn alt" href="install.php?id=<?= (int)$r['id'] ?>">Manage</a>
+    <?php if ($r['status'] === 'blocked'): ?><button class="btn" name="lock" value="<?= (int)$r['id'] ?>">Unlock</button>
+    <?php else: ?><button class="btn red" name="lock" value="<?= (int)$r['id'] ?>" data-confirm="Lock this device now? The app stops working at its next check-in.">Lock</button><?php endif; ?></td>
 </tr>
 <?php endforeach; if (!$rows): ?><tr><td colspan="8" class="muted">No PCs yet. They appear here the first time the app checks in.</td></tr><?php endif; ?>
 </table>
 <div class="row"><select name="clinic_id" style="max-width:240px"><option value="0">- remove from clinic -</option><?php foreach (clinics_all() as $cl): ?><option value="<?= (int)$cl['id'] ?>"><?= h($cl['name']) ?></option><?php endforeach; ?></select>
-  <button class="btn" data-confirm="Move the ticked PCs? Their own expiry date and URL are cleared, and an access code from another clinic is detached from them.">Move ticked PCs to this clinic</button></div>
+  <button class="btn" data-confirm="Move the ticked PCs? Their own expiry date and URL are cleared, and an access code from another clinic is detached from them.">Move ticked PCs to this clinic</button>
+  <button class="btn red" name="bulk" value="lock" data-confirm="Lock all ticked devices?">Lock ticked</button>
+  <button class="btn alt" name="bulk" value="unlock">Unlock ticked</button></div>
 </form>
 <p class="muted">Times shown in <?= h(cfg()['timezone'] ?? 'UTC') ?>. "Online" means checked in within the last <?= HMS_ONLINE_MINUTES ?> minutes (the app checks in every 10).</p>
 <?php page_footer();

@@ -146,7 +146,7 @@ page_header('Downloads', 'releases.php');
       <?php foreach (HMS_PLATFORMS as $k => $p): ?><option value="<?= h($k) ?>"><?= h($p['label']) ?> (.<?= h($p['ext']) ?>)</option><?php endforeach; ?></select></div>
     <div><label>Version</label><input type="text" name="version" placeholder="2.0.0" maxlength="20" required></div>
   </div>
-  <label>Installer file (.exe for Windows, .dmg for Mac: <b>arm64</b> = Apple chip, <b>x64</b> = Intel, .apk for Android)</label><input type="file" name="file" required>
+  <label>Installer file (.exe for Windows, .dmg for Mac: <b>arm64</b> = Apple chip, <b>x64</b> = Intel, .apk for Android, .AppImage for Linux: <b>x64</b> = Intel/AMD, <b>arm64</b> = ARM)</label><input type="file" name="file" required>
   <label>What changed (optional, shown to users)</label><input type="text" name="notes" maxlength="500">
   <div class="row"><button class="btn" id="up-btn">Upload</button> <button type="button" class="btn alt" id="up-cancel" style="display:none">Pause</button></div>
   <div id="up-box" style="display:none;margin-top:12px">

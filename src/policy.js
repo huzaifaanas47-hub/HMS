@@ -84,7 +84,7 @@ function createPolicy({ store, config, appVersion, onChange }) {
 
   // -> { state: 'ok'|'expired'|'blocked'|'stale'|'enroll'|'unverified', baseUrl, message, expiresAt, daysLeft }
   function evaluate() {
-    const out = { state: 'ok', baseUrl: null, message: null, expiresAt: null, daysLeft: null, update: null };
+    const out = { state: 'ok', baseUrl: null, message: null, notice: null, expiresAt: null, daysLeft: null, update: null };
     const c = loadCached();
     if (!c) { if (active) out.state = 'unverified'; return out; } // first start: nothing is allowed until the server has answered
     if (c.invalid) { out.state = 'stale'; return out; }
@@ -92,6 +92,7 @@ function createPolicy({ store, config, appVersion, onChange }) {
     const t = now();
     out.baseUrl = p.baseUrl || null;
     out.message = p.message || null;
+    out.notice = (typeof p.notice === 'string' && p.notice) ? p.notice.slice(0, 500) : null; // admin notice for the clinic (e.g. maintenance)
     out.expiresAt = p.expiresAt || null;
     // The signed answer may announce a newer build the admin has uploaded. Checked here as well, so a cached answer stops showing it once updated.
     const u = p.update;

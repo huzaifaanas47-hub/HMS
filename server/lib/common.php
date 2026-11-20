@@ -34,7 +34,7 @@ function db(): PDO {
 function ensure_schema(PDO $pdo): void {
     try { $v = $pdo->query("SELECT v FROM settings WHERE k = 'schema_version'")->fetchColumn(); }
     catch (Throwable $e) { return; } // not installed yet
-    if ($v === '5') return;
+    if ($v === '6') return;
     $opts = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
     $pdo->exec("CREATE TABLE IF NOT EXISTS clinics (
         id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL UNIQUE, url VARCHAR(2048) NULL,
@@ -56,8 +56,11 @@ function ensure_schema(PDO $pdo): void {
     $has = (int)$pdo->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'installs' AND COLUMN_NAME = 'code_id'")->fetchColumn();
     if (!$has) $pdo->exec('ALTER TABLE installs ADD COLUMN code_id INT NULL, ADD KEY idx_code (code_id)');
     // v5: access codes are required by default. Devices already listed keep working; only unknown devices must enter a code.
-    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('require_code', '1') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
-    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema_version', '5') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
+    if ($v === false || (int)$v < 5) $pdo->prepare("INSERT INTO settings (k, v) VALUES ('require_code', '1') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
+    // v6: a notice the admin sends to every device of a clinic ("Server maintenance tonight").
+    $has = (int)$pdo->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'clinics' AND COLUMN_NAME = 'notice'")->fetchColumn();
+    if (!$has) $pdo->exec('ALTER TABLE clinics ADD COLUMN notice VARCHAR(500) NULL');
+    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema_version', '6') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
 }
 
 function h($v): string { return htmlspecialchars((string)$v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
@@ -206,6 +209,7 @@ function update_info(array $inst, string $arch = ''): ?array {
     if ($plat === 'android') { $key = 'android'; $os = 'android'; }
     elseif ($plat === 'win32') { $key = 'windows'; $os = 'windows'; }
     elseif ($plat === 'darwin') { $key = $arch === 'x64' ? 'mac-x64' : 'mac-arm64'; $os = 'mac'; }
+    elseif ($plat === 'linux') { $key = $arch === 'arm64' ? 'linux-arm64' : 'linux-x64'; $os = 'linux'; }
     else return null;
     $cur = trim((string)($inst['app_version'] ?? ''));
     $rel = release_latest($key);
@@ -239,6 +243,7 @@ function build_policy(array $inst, string $nonce, string $arch = ''): array {
         'message' => $msg,
         'offlineGraceDays' => (int)$s['offline_grace_days'],
         'update' => update_info($inst, $arch),
+        'notice' => !empty($cl['notice']) ? (string)$cl['notice'] : null, // shown inside the app (not a lock screen)
         'serverTime' => time() * 1000,
     ];
 }
@@ -338,7 +343,7 @@ function redirect(string $to): void { header('Location: ' . $to); exit; }
 /* ------------------------------------------------------------------ layout */
 
 function page_header(string $title, string $active = ''): void {
-    $nav = ['clinics.php' => 'Clinics', 'index.php' => 'Devices', 'codes.php' => 'Codes', 'releases.php' => 'Downloads', 'settings.php' => 'Settings'];
+    $nav = ['clinics.php' => 'Clinics', 'index.php' => 'Devices', 'codes.php' => 'Codes', 'releases.php' => 'Downloads', 'versions.php' => 'Versions', 'settings.php' => 'Settings'];
     echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
         . '<title>' . h($title) . ' - HMS Admin</title><style>
 *{box-sizing:border-box}body{margin:0;font:14px/1.5 Segoe UI,-apple-system,BlinkMacSystemFont,Inter,Roboto,Arial,sans-serif;background:#f1f4f9;color:#18202f;-webkit-font-smoothing:antialiased}
@@ -376,6 +381,8 @@ const HMS_PLATFORMS = [
     'mac-arm64' => ['label' => 'Mac (Apple chip)',   'ext' => 'dmg'],
     'mac-x64'   => ['label' => 'Mac (Intel chip)',   'ext' => 'dmg'],
     'android'   => ['label' => 'Android',            'ext' => 'apk'],
+    'linux-x64'   => ['label' => 'Linux (Intel/AMD, AppImage)', 'ext' => 'appimage'],
+    'linux-arm64' => ['label' => 'Linux (ARM, AppImage)',       'ext' => 'appimage'],
 ];
 
 function releases_dir(): string { return __DIR__ . '/releases'; }
