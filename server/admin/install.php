@@ -64,6 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     redirect('install.php?id=' . $id);
 }
 
+$gl = [$inst]; geo_fill($gl); $inst = $gl[0];
 page_header('Manage install', 'index.php');
 $e = effective_expiry($inst);
 ?>
@@ -76,6 +77,7 @@ $e = effective_expiry($inst);
   <div><b>App version</b><br><?= h($inst['app_version'] ?: '—') ?></div>
   <div style="margin-top:10px"><b>First seen</b><br><?= h(fmt_local($inst['first_seen'])) ?> (<?= (int)$inst['checkins'] ?> check-ins)</div>
   <div style="margin-top:10px"><b>Last seen</b><br><?= h(fmt_local($inst['last_seen'])) ?> · <?= h(ago($inst['last_seen'])) ?> · <?= h($inst['ip']) ?></div>
+  <div style="margin-top:10px"><b>Location (from IP, approximate)</b><br><?= !empty($inst['geo']) ? h($inst['geo']) : '—' ?></div>
 </div></div>
 
 <form method="post" class="box"><?= csrf_field() ?><input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="action" value="save">

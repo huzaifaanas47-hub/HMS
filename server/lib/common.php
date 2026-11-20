@@ -34,7 +34,7 @@ function db(): PDO {
 function ensure_schema(PDO $pdo): void {
     try { $v = $pdo->query("SELECT v FROM settings WHERE k = 'schema_version'")->fetchColumn(); }
     catch (Throwable $e) { return; } // not installed yet
-    if ($v === '6') return;
+    if ($v === '7') return;
     $opts = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
     $pdo->exec("CREATE TABLE IF NOT EXISTS clinics (
         id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL UNIQUE, url VARCHAR(2048) NULL,
@@ -60,7 +60,10 @@ function ensure_schema(PDO $pdo): void {
     // v6: a notice the admin sends to every device of a clinic ("Server maintenance tonight").
     $has = (int)$pdo->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'clinics' AND COLUMN_NAME = 'notice'")->fetchColumn();
     if (!$has) $pdo->exec('ALTER TABLE clinics ADD COLUMN notice VARCHAR(500) NULL');
-    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema_version', '6') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
+    // v7: approximate location of each device, looked up from its IP address.
+    $has = (int)$pdo->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'installs' AND COLUMN_NAME = 'geo'")->fetchColumn();
+    if (!$has) $pdo->exec('ALTER TABLE installs ADD COLUMN geo VARCHAR(120) NULL, ADD COLUMN geo_ip VARCHAR(45) NULL');
+    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema_version', '7') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
 }
 
 function h($v): string { return htmlspecialchars((string)$v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
@@ -342,6 +345,49 @@ function redirect(string $to): void { header('Location: ' . $to); exit; }
 
 /* ------------------------------------------------------------------ layout */
 
+/* Where in the world is a device? Looked up from its IP address (approximate: city / region / country and the internet provider),
+   saved with the device so each IP is looked up only once. Private addresses are shown as "Local network". */
+function geo_lookup(string $ip): ?string {
+    $url = 'https://ipwho.is/' . rawurlencode($ip);
+    $body = null;
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 3, CURLOPT_CONNECTTIMEOUT => 2, CURLOPT_USERAGENT => 'HMS-Admin']);
+        $body = curl_exec($ch);
+        curl_close($ch);
+    } else {
+        $body = @file_get_contents($url, false, stream_context_create(['http' => ['timeout' => 3, 'user_agent' => 'HMS-Admin']]));
+    }
+    $j = is_string($body) ? json_decode($body, true) : null;
+    if (!is_array($j) || empty($j['success'])) return null;
+    $parts = array_filter([clip($j['city'] ?? '', 60), clip($j['region'] ?? '', 60), clip($j['country'] ?? '', 60)]);
+    $s = implode(', ', array_unique($parts));
+    $isp = is_array($j['connection'] ?? null) ? clip($j['connection']['isp'] ?? '', 60) : '';
+    if ($isp !== '') $s .= ($s !== '' ? ' - ' : '') . $isp;
+    return $s !== '' ? clip($s, 120) : null;
+}
+
+function geo_fill(array &$rows, int $max = 6): void {
+    $done = 0; $down = false; $seen = [];
+    foreach ($rows as &$r) {
+        $ip = (string)($r['ip'] ?? '');
+        if ($ip === '' || !filter_var($ip, FILTER_VALIDATE_IP)) continue;
+        if (($r['geo_ip'] ?? '') === $ip && (string)($r['geo'] ?? '') !== '') continue;
+        if (isset($seen[$ip])) { $g = $seen[$ip]; }
+        elseif (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) { $g = 'Local network'; }
+        else {
+            if ($down || $done >= $max) continue;
+            $done++;
+            $g = geo_lookup($ip);
+            if ($g === null) { $down = true; continue; } // service unreachable: stop asking during this page view
+        }
+        $seen[$ip] = $g;
+        db()->prepare('UPDATE installs SET geo = ?, geo_ip = ? WHERE id = ?')->execute([$g, $ip, $r['id']]);
+        $r['geo'] = $g; $r['geo_ip'] = $ip;
+    }
+    unset($r);
+}
+
 function page_header(string $title, string $active = ''): void {
     $nav = ['clinics.php' => 'Clinics', 'index.php' => 'Devices', 'codes.php' => 'Codes', 'releases.php' => 'Downloads', 'versions.php' => 'Versions', 'settings.php' => 'Settings'];
     echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -362,6 +408,24 @@ textarea{min-height:70px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 
 .btn{display:inline-block;background:#3b82f6;color:#fff;border:0;border-radius:8px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer;text-decoration:none;transition:background .12s}.btn:hover{background:#2f6fdb}.btn.alt{background:#e8ecf4;color:#25324a}.btn.alt:hover{background:#dce2ee}.btn.red{background:#dc3f3f}.btn.red:hover{background:#c63232}
 .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.msg{padding:11px 16px;border-radius:10px;margin-bottom:16px;font-weight:500}.msg.ok{background:#dff5e8;color:#17703a}.msg.err{background:#fde6e6;color:#b42323}
 code,.mono{font-family:Consolas,monospace;font-size:12px;background:#eef1f6;padding:2px 5px;border-radius:4px;word-break:break-all}.muted{color:#6b7587;font-size:12px}
+@media(max-width:760px){
+header{flex-wrap:wrap;height:auto;padding:8px 10px;gap:2px;position:static}
+header b{flex:0 0 100%;margin:2px 4px 4px}
+header a{padding:6px 10px;font-size:13px}.sp{display:none}
+main{margin:14px auto;padding:0 12px}h1{font-size:19px}
+.cards{gap:8px}.card{flex:1 1 calc(50% - 8px);min-width:0;padding:10px 12px}
+input[type=text],input[type=url],input[type=number],input[type=password],input[type=datetime-local],select,textarea{max-width:100%!important}
+.box{padding:14px;min-width:0!important}
+.row .btn{flex:1 1 auto;text-align:center}
+table.rt,table.rt tbody{display:block;background:none;border:0;box-shadow:none}
+table.rt tr.hd{display:none}
+table.rt tr{display:block;background:#fff;border:1px solid #e2e8f2;border-radius:12px;margin-bottom:12px;padding:8px 12px}
+table.rt td{display:block;border:0;padding:5px 0 5px 96px;position:relative;min-height:24px;word-break:break-word}
+table.rt td[data-l]::before{content:attr(data-l);position:absolute;left:0;top:6px;width:88px;color:#6b7587;font-size:11px;font-weight:600;text-transform:uppercase}
+table.rt td:not([data-l]),table.rt td[colspan]{padding-left:0}
+table.rt td input[type=checkbox]{width:22px;height:22px}
+table.rt td .btn{margin:0 6px 6px 0}
+}
 </style></head><body><header><b>HMS Admin</b>';
     foreach ($nav as $href => $label) echo '<a href="' . h($href) . '"' . ($active === $href ? ' class="on"' : '') . '>' . h($label) . '</a>';
     echo '<span class="sp"></span><a href="logout.php">Log out</a></header><main>';
@@ -370,7 +434,7 @@ code,.mono{font-family:Consolas,monospace;font-size:12px;background:#eef1f6;padd
 
 function page_footer(): void {
     // Confirmation prompts: buttons with data-confirm ask first (inline onclick is blocked by the CSP).
-    echo '</main><script nonce="' . csp_nonce() . '">document.addEventListener("click",function(e){var b=e.target.closest("[data-confirm]");if(b&&!confirm(b.getAttribute("data-confirm")))e.preventDefault();});</script></body></html>';
+    echo '</main><script nonce="' . csp_nonce() . '">document.addEventListener("click",function(e){var b=e.target.closest("[data-confirm]");if(b&&!confirm(b.getAttribute("data-confirm")))e.preventDefault();});document.querySelectorAll("table").forEach(function(t){var f=t.querySelector("tr");if(!f||!f.querySelector("th"))return;var h=[].map.call(f.children,function(c){return(c.textContent||"").trim();});f.classList.add("hd");t.classList.add("rt");t.querySelectorAll("tr").forEach(function(r){if(r===f)return;[].forEach.call(r.children,function(c,i){if(!c.hasAttribute("data-l")&&h[i])c.setAttribute("data-l",h[i]);});});});</script></body></html>';
 }
 
 

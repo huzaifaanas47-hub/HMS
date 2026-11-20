@@ -64,6 +64,7 @@ if ($where) $sql .= ' WHERE ' . implode(' AND ', $where);
 $st = db()->prepare($sql . ' ORDER BY last_seen DESC LIMIT 1000');
 $st->execute($args);
 $rows = $st->fetchAll();
+geo_fill($rows); // approximate location from the IP of each device (saved after the first lookup)
 
 $now = time();
 $stats = ['total' => 0, 'online' => 0, 'blocked' => 0, 'expired' => 0, 'soon' => 0];
@@ -78,6 +79,25 @@ foreach (db()->query('SELECT status, clinic_id, code_id, expires_at, last_seen F
 
 page_header('Devices', 'index.php');
 ?>
+<style>
+/* Phone layout: each device becomes a card instead of a wide table that scrolls sideways. */
+@media (max-width:760px){
+  main{margin:16px auto;padding:0 12px}
+  .cards{gap:8px}.cards .card{flex:1 1 calc(50% - 8px);min-width:0;padding:10px 12px}
+  main input[type=text],main select{max-width:100%!important;width:100%}
+  .row .btn{flex:1 1 auto;text-align:center}
+  table.dev,table.dev tbody{display:block;background:none;border:0;box-shadow:none}
+  table.dev tr.hd{display:none}
+  table.dev tr{display:block;background:#fff;border:1px solid #e2e8f2;border-radius:12px;margin-bottom:12px;padding:8px 12px}
+  table.dev td{display:block;border:0;padding:5px 0 5px 92px;position:relative;min-height:24px;word-break:break-word}
+  table.dev td::before{content:attr(data-l);position:absolute;left:0;top:6px;width:84px;color:#6b7587;font-size:11px;font-weight:600;text-transform:uppercase}
+  table.dev td.ck{padding:0 0 6px}table.dev td.ck::before{content:none}
+  table.dev td.ck input{width:22px;height:22px}
+  table.dev td.act{padding:8px 0 2px;white-space:normal!important}table.dev td.act::before{content:none}
+  table.dev td.act .btn{margin:0 6px 6px 0}
+  table.dev td.none{padding:6px 0}table.dev td.none::before{content:none}
+}
+</style>
 <h1>All devices<?= $fcode && ($cc = code_get($fcode)) ? ' that joined with ' . h(code_pretty($cc['code'])) : '' ?></h1>
 <div class="cards">
   <div class="card"><b><?= $stats['total'] ?></b><span>Total installs</span></div>
@@ -90,8 +110,8 @@ page_header('Devices', 'index.php');
   <select name="clinic" style="max-width:220px"><option value="">All clinics</option><option value="0"<?= $fc === 0 ? ' selected' : '' ?>>Not in a clinic</option><?php foreach (clinics_all() as $cl): ?><option value="<?= (int)$cl['id'] ?>"<?= $fc === (int)$cl['id'] ? ' selected' : '' ?>><?= h($cl['name']) ?></option><?php endforeach; ?></select>
   <button class="btn alt">Filter</button></form>
 <form method="post" action="index.php<?= $_SERVER['QUERY_STRING'] !== '' ? '?' . h($_SERVER['QUERY_STRING']) : '' ?>"><?= csrf_field() ?>
-<table>
-<tr><th style="width:26px"></th><th>PC</th><th>Clinic</th><th>System</th><th>Last seen</th><th>Access until</th><th>Site URL pushed</th><th></th></tr>
+<table class="dev">
+<tr class="hd"><th style="width:26px"></th><th>PC</th><th>Clinic</th><th>System</th><th>Last seen</th><th>Access until</th><th>Site URL pushed</th><th></th></tr>
 <?php foreach ($rows as $r):
     $online = ($t = utc_ts($r['last_seen'])) && $now - $t < HMS_ONLINE_MINUTES * 60;
     $e = effective_expiry($r);
@@ -99,19 +119,19 @@ page_header('Devices', 'index.php');
     $cl = clinic_get($r['clinic_id']);
 ?>
 <tr>
-  <td><input type="checkbox" name="pc[]" value="<?= (int)$r['id'] ?>"></td>
-  <td><span class="dot<?= $online ? ' on' : '' ?>"></span><b><?= h($r['name'] ?: ($r['device'] ?: 'Unnamed')) ?></b>
+  <td class="ck"><input type="checkbox" name="pc[]" value="<?= (int)$r['id'] ?>"></td>
+  <td data-l="Device"><span class="dot<?= $online ? ' on' : '' ?>"></span><b><?= h($r['name'] ?: ($r['device'] ?: 'Unnamed')) ?></b>
       <?php if ($r['status'] === 'blocked'): ?><span class="tag bad">blocked</span><?php endif; ?><br><span class="muted mono"><?= h(substr($r['install_id'], 0, 8)) ?></span></td>
-  <td><?= $cl ? '<a href="clinic.php?id=' . (int)$cl['id'] . '">' . h($cl['name']) . '</a>' : '<span class="muted">none</span>' ?></td>
-  <td><?= h($r['platform']) ?> <?= h($r['os_release']) ?><br><span class="muted">v<?= h($r['app_version']) ?> · <?= h($r['ip']) ?></span></td>
-  <td><?= h(ago($r['last_seen'])) ?><br><span class="muted"><?= h(fmt_local($r['last_seen'])) ?></span></td>
-  <td><?php if ($e === null): ?><span class="tag ok">no expiry</span><?php elseif ($e <= $now): ?><span class="tag bad">expired <?= h(fmt_local(gmdate('Y-m-d H:i:s', $e))) ?></span><?php else: ?><span class="tag<?= $e <= $now + 7 * 86400 ? ' warn' : '' ?>"><?= h(fmt_local(gmdate('Y-m-d H:i:s', $e))) ?></span><?php endif; ?></td>
-  <td class="muted"><?= $url !== '' ? h($url) : 'installer default' ?><?= $r['url_override'] ? ' <span class="tag">override</span>' : '' ?></td>
-  <td style="white-space:nowrap"><a class="btn alt" href="install.php?id=<?= (int)$r['id'] ?>">Manage</a>
+  <td data-l="Clinic"><?= $cl ? '<a href="clinic.php?id=' . (int)$cl['id'] . '">' . h($cl['name']) . '</a>' : '<span class="muted">none</span>' ?></td>
+  <td data-l="System"><?= h($r['platform']) ?> <?= h($r['os_release']) ?><br><span class="muted">v<?= h($r['app_version']) ?> · <?= h($r['ip']) ?></span><?= !empty($r['geo']) ? '<br><span class="muted">Location: ' . h($r['geo']) . '</span>' : '' ?></td>
+  <td data-l="Last seen"><?= h(ago($r['last_seen'])) ?><br><span class="muted"><?= h(fmt_local($r['last_seen'])) ?></span></td>
+  <td data-l="Access until"><?php if ($e === null): ?><span class="tag ok">no expiry</span><?php elseif ($e <= $now): ?><span class="tag bad">expired <?= h(fmt_local(gmdate('Y-m-d H:i:s', $e))) ?></span><?php else: ?><span class="tag<?= $e <= $now + 7 * 86400 ? ' warn' : '' ?>"><?= h(fmt_local(gmdate('Y-m-d H:i:s', $e))) ?></span><?php endif; ?></td>
+  <td class="muted" data-l="Site URL"><?= $url !== '' ? h($url) : 'installer default' ?><?= $r['url_override'] ? ' <span class="tag">override</span>' : '' ?></td>
+  <td class="act" style="white-space:nowrap"><a class="btn alt" href="install.php?id=<?= (int)$r['id'] ?>">Manage</a>
     <?php if ($r['status'] === 'blocked'): ?><button class="btn" name="lock" value="<?= (int)$r['id'] ?>">Unlock</button>
     <?php else: ?><button class="btn red" name="lock" value="<?= (int)$r['id'] ?>" data-confirm="Lock this device now? The app stops working at its next check-in.">Lock</button><?php endif; ?></td>
 </tr>
-<?php endforeach; if (!$rows): ?><tr><td colspan="8" class="muted">No PCs yet. They appear here the first time the app checks in.</td></tr><?php endif; ?>
+<?php endforeach; if (!$rows): ?><tr><td colspan="8" class="muted none">No PCs yet. They appear here the first time the app checks in.</td></tr><?php endif; ?>
 </table>
 <div class="row"><select name="clinic_id" style="max-width:240px"><option value="0">- remove from clinic -</option><?php foreach (clinics_all() as $cl): ?><option value="<?= (int)$cl['id'] ?>"><?= h($cl['name']) ?></option><?php endforeach; ?></select>
   <button class="btn" data-confirm="Move the ticked PCs? Their own expiry date and URL are cleared, and an access code from another clinic is detached from them.">Move ticked PCs to this clinic</button>
