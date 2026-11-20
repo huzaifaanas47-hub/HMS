@@ -266,6 +266,18 @@ function createViewForTab(tab) {
     view.webContents.on(evt, () => { if (!view.webContents.isDestroyed()) sendTabInfo(tab.id); });
   });
   view.webContents.on('did-finish-load', () => autofillCredentials(view, tab.id));
+  // No internet / server unreachable: a friendly page that retries by itself instead of a blank error page.
+  view.webContents.on('did-fail-load', (e, code, desc, failedUrl, isMainFrame) => {
+    if (!isMainFrame || ![-21, -101, -102, -105, -106, -109, -118, -7].includes(code)) return;
+    if (!/^https?:/i.test(failedUrl) || view.webContents.isDestroyed()) return;
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const html = '<html><body style="margin:0;background:#0f1420;color:#fff;font-family:Segoe UI,Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center">'
+      + '<div style="padding:28px;max-width:460px"><h2>No internet connection</h2>'
+      + '<p style="color:#b7c0d0;line-height:1.5">HMS cannot reach the server. Check your internet connection. HMS tries again by itself every few seconds.</p>'
+      + '<a href="' + esc(failedUrl) + '" style="display:inline-block;margin-top:14px;padding:12px 26px;background:#3b82f6;color:#fff;border-radius:10px;text-decoration:none;font-weight:bold">Try again</a></div></body></html>';
+    view.webContents.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html)).catch(() => {});
+    setTimeout(() => { if (!view.webContents.isDestroyed()) view.webContents.loadURL(failedUrl).catch(() => {}); }, 10000);
+  });
   const url = resolveTab(tab);
   viewUrls.set(tab.id, url);
   view.webContents.loadURL(url).catch(() => {});

@@ -37,7 +37,9 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebStorage;
 import android.webkit.WebView;
+import android.webkit.WebResourceError;
 import android.webkit.WebViewClient;
+import android.app.KeyguardManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -72,6 +74,7 @@ import java.util.concurrent.Executors;
  * so each one keeps its own login, cookies and storage and several people/roles can be signed in at once.
  */
 public class MainActivity extends Activity {
+    private static final int REQ_UNLOCK = 300;
     private static final int REQ_FIRST_RUN = 100, REQ_MEDIA = 101, REQ_GEO = 102, REQ_FILE = 200;
     private static final long CHECK_EVERY_MS = 10 * 60 * 1000L;
     private static final int MAX_TABS = 20;
@@ -125,11 +128,13 @@ public class MainActivity extends Activity {
         sp = getSharedPreferences("hms", MODE_PRIVATE);
         multiProfile = WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE);
         setUpEdgeToEdge();
+        applyAppLockFlags();
         loadTabs();
         buildUi();
         rebuildTabBar();
         askAllPermissionsOnce();
         apply(policy.evaluate(), null);
+        handleJoinIntent(getIntent());
         if (!multiProfile && !sp.getBoolean("warnedProfiles", false)) {
             sp.edit().putBoolean("warnedProfiles", true).apply();
             new AlertDialog.Builder(this).setTitle("Update Android System WebView")
@@ -138,7 +143,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    @Override protected void onResume() { super.onResume(); ui.post(ticker); }
+    @Override protected void onResume() { super.onResume(); ui.post(ticker); enforceAppLock(); }
+    @Override protected void onStop() { super.onStop(); if (!authenticating) { leftAt = System.currentTimeMillis(); lockCanceled = false; } }
+    @Override protected void onNewIntent(Intent in) { super.onNewIntent(in); setIntent(in); handleJoinIntent(in); }
     @Override protected void onPause() { super.onPause(); ui.removeCallbacks(ticker); }
     @Override protected void onDestroy() { super.onDestroy(); io.shutdownNow(); }
 
@@ -462,6 +469,7 @@ public class MainActivity extends Activity {
             selectTab(activeId);
             maybePromptUpdate(s);
             maybeShowNotice(s);
+            pendingJoinCode = null; // already set up: a scanned code is not needed
             if (!sp.getBoolean("tipLogin", false)) {
                 sp.edit().putBoolean("tipLogin", true).apply();
                 Toast.makeText(this, "Tip: long-press a role tab to save its login.", Toast.LENGTH_LONG).show();
@@ -478,6 +486,7 @@ public class MainActivity extends Activity {
         switch (s.state) {
             case "enroll":
                 lockUi("Enter your access code", "Your administrator gave you a code like ABCD-EFGH. You only need to enter it once.", null, true, false);
+                usePendingCode(); // opened from the QR / join link: the code is filled in and sent for the user
                 break;
             case "expired":
                 lockUi("Access has expired", s.expiresAt > 0 ? "Your access to HMS ended on " + date + "." : "Your access to HMS has ended.", s.message, false, true);
@@ -495,6 +504,128 @@ public class MainActivity extends Activity {
     }
 
     /** A build uploaded in the admin panel is announced in the signed answer: ask at every app start until it is installed, and keep a menu entry. */
+    // ------------------------------------------------------------------ app lock, join link, offline page
+
+    private static final long LOCK_GRACE_MS = 60000L; // back within a minute: no question asked
+    private boolean unlocked = false, authenticating = false, lockCanceled = false;
+    private long leftAt = 0;
+    private View lockCover;
+    private String pendingJoinCode;
+    private final Set<WebView> offlineViews = new HashSet<>();
+
+    private boolean appLockOn() { return sp.getBoolean("appLock", false); }
+
+    /** With App lock on, the recent-apps preview is blank and screenshots are blocked. */
+    private void applyAppLockFlags() {
+        if (sp == null) sp = getSharedPreferences("hms", MODE_PRIVATE);
+        if (appLockOn()) getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    }
+
+    private boolean deviceHasScreenLock() {
+        KeyguardManager km = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+        return km != null && km.isDeviceSecure();
+    }
+
+    private void toggleAppLock() {
+        if (appLockOn()) {
+            sp.edit().putBoolean("appLock", false).apply();
+            applyAppLockFlags();
+            if (lockCover != null) lockCover.setVisibility(View.GONE);
+            Toast.makeText(this, "App lock is off.", Toast.LENGTH_SHORT).show();
+        } else if (!deviceHasScreenLock()) {
+            Toast.makeText(this, "First set a screen lock (PIN, pattern or fingerprint) in the phone settings.", Toast.LENGTH_LONG).show();
+        } else {
+            sp.edit().putBoolean("appLock", true).apply();
+            applyAppLockFlags();
+            unlocked = true;
+            leftAt = System.currentTimeMillis();
+            Toast.makeText(this, "App lock is on. HMS asks for your phone PIN, pattern or fingerprint when you come back after a minute.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void enforceAppLock() {
+        if (!appLockOn()) { if (lockCover != null) lockCover.setVisibility(View.GONE); return; }
+        if (authenticating) return;
+        if (unlocked && System.currentTimeMillis() - leftAt < LOCK_GRACE_MS) { if (lockCover != null) lockCover.setVisibility(View.GONE); return; }
+        unlocked = false;
+        showLockCover();
+        if (!lockCanceled) askDeviceCredential();
+    }
+
+    private void showLockCover() {
+        if (lockCover == null) {
+            LinearLayout box = new LinearLayout(this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setGravity(Gravity.CENTER);
+            box.setBackgroundColor(Color.parseColor("#0F1420"));
+            box.setClickable(true); // swallows touches so nothing underneath can be used
+            TextView tv = new TextView(this);
+            tv.setText("HMS is locked");
+            tv.setTextColor(Color.WHITE);
+            tv.setTextSize(22);
+            tv.setGravity(Gravity.CENTER);
+            Button b = new Button(this);
+            b.setText("Unlock");
+            b.setOnClickListener(v -> { lockCanceled = false; askDeviceCredential(); });
+            box.addView(tv);
+            box.addView(b);
+            addContentView(box, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            lockCover = box;
+        }
+        lockCover.setVisibility(View.VISIBLE);
+        lockCover.bringToFront();
+    }
+
+    private void askDeviceCredential() {
+        if (authenticating) return;
+        KeyguardManager km = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+        Intent i = (km != null && km.isDeviceSecure()) ? km.createConfirmDeviceCredentialIntent("HMS is locked", "Confirm it is you to open HMS") : null;
+        if (i == null) { // the phone's screen lock was removed: App lock cannot work, so turn it off
+            sp.edit().putBoolean("appLock", false).apply();
+            applyAppLockFlags();
+            if (lockCover != null) lockCover.setVisibility(View.GONE);
+            Toast.makeText(this, "App lock turned off: this phone has no screen lock any more.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        authenticating = true;
+        try { startActivityForResult(i, REQ_UNLOCK); }
+        catch (ActivityNotFoundException ex) { authenticating = false; lockCanceled = true; }
+    }
+
+    /** Opened from the QR code / join page (hms://join?code=ABCD-EFGH): the code is typed in for the user. */
+    private void handleJoinIntent(Intent in) {
+        if (in == null || in.getData() == null) return;
+        Uri u = in.getData();
+        if (!"hms".equals(u.getScheme()) || !"join".equals(u.getHost())) return;
+        String c = u.getQueryParameter("code");
+        in.setData(null); // used once
+        if (c == null || !c.matches("[A-Za-z0-9-]{4,12}")) return;
+        pendingJoinCode = c.toUpperCase();
+        if ("enroll".equals(lastState.state)) usePendingCode();
+        else if ("ok".equals(lastState.state)) {
+            pendingJoinCode = null;
+            Toast.makeText(this, "This phone is already set up.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void usePendingCode() {
+        if (pendingJoinCode == null || codeInput == null) return;
+        String c = pendingJoinCode;
+        pendingJoinCode = null;
+        codeInput.setText(c);
+        submitCode();
+    }
+
+    private static String offlineHtml(String url) {
+        String u = url.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;");
+        return "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head>"
+                + "<body style='margin:0;background:#0F1420;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center'>"
+                + "<div style='padding:28px;max-width:420px'><h2 style='margin:12px 0 8px'>No internet connection</h2>"
+                + "<p style='color:#B7C0D0;line-height:1.5'>HMS cannot reach the server. Check your Wi-Fi or mobile data. HMS tries again by itself every few seconds.</p>"
+                + "<a href=\"" + u + "\" style='display:inline-block;margin-top:14px;padding:12px 26px;background:#3B82F6;color:#fff;border-radius:10px;text-decoration:none;font-weight:bold'>Try again</a></div></body></html>";
+    }
+
     private String noticeShown = null; // notice text already shown in this run; shown again at the next app start while the admin keeps it
 
     private void maybeShowNotice(final Policy.State s) {
@@ -700,6 +831,18 @@ public class MainActivity extends Activity {
                 return true;
             }
 
+            // No internet / server unreachable: a friendly page that retries by itself, instead of a blank or ugly error.
+            @Override
+            public void onReceivedError(final WebView v, WebResourceRequest r, WebResourceError e) {
+                if (!r.isForMainFrame()) return;
+                int c = e.getErrorCode();
+                if (c != WebViewClient.ERROR_HOST_LOOKUP && c != WebViewClient.ERROR_CONNECT && c != WebViewClient.ERROR_TIMEOUT && c != WebViewClient.ERROR_IO) return;
+                final String failed = r.getUrl().toString();
+                v.loadDataWithBaseURL(failed, offlineHtml(failed), "text/html", "utf-8", failed);
+                offlineViews.add(v);
+                ui.postDelayed(() -> { if (offlineViews.remove(v) && !isFinishing()) v.loadUrl(failed); }, 10000);
+            }
+
             // Every page load (app start, after a log out, any redirect to the login page) fills this role's saved login.
             @Override
             public void onPageFinished(WebView v, String url) { autofill(t, v, url); }
@@ -856,6 +999,12 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
+        if (req == REQ_UNLOCK) {
+            authenticating = false;
+            if (res == RESULT_OK) { unlocked = true; lockCanceled = false; leftAt = System.currentTimeMillis(); if (lockCover != null) lockCover.setVisibility(View.GONE); }
+            else lockCanceled = true; // cancelled: stay covered; the Unlock button asks again
+            return;
+        }
         if (req == REQ_FILE && fileCallback != null) {
             fileCallback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(res, data));
             fileCallback = null;
@@ -874,6 +1023,7 @@ public class MainActivity extends Activity {
         m.add(Menu.NONE, 3, 4, "Log out this role");
         m.add(Menu.NONE, 4, 5, "Log out all roles");
         m.add(Menu.NONE, 5, 6, "About");
+        m.add(Menu.NONE, 8, 7, appLockOn() ? "App lock: ON (tap to turn off)" : "App lock: OFF (tap to turn on)");
     }
 
     private void showMenu(View anchor) {
@@ -914,6 +1064,9 @@ public class MainActivity extends Activity {
                 return true;
             case 7:
                 if (lastState.updateUrl != null) openUpdate(lastState.updateUrl);
+                return true;
+            case 8:
+                toggleAppLock();
                 return true;
             case 5:
                 String until = lastState.expiresAt > 0 ? DateFormat.getDateTimeInstance().format(new Date(lastState.expiresAt)) : "no end date";

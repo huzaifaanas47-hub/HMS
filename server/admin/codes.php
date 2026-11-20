@@ -96,7 +96,9 @@ You choose how many devices may join and until when. Both can be changed later.<
         <button class="btn red" name="action" value="delete" data-confirm="Delete this code? Its devices keep working under the clinic.">Delete</button></div>
     </form>
     <form method="post" class="row"><?= csrf_field() ?><input type="hidden" name="id" value="<?= (int)$c['id'] ?>"><input type="hidden" name="action" value="extend">
-      <button class="btn alt" name="days" value="30">+30 days</button><button class="btn alt" name="days" value="90">+90 days</button></form></details></td>
+      <button class="btn alt" name="days" value="30">+30 days</button><button class="btn alt" name="days" value="90">+90 days</button></form></details>
+    <details style="margin-top:6px"><summary class="btn alt" style="display:inline-block;cursor:pointer">QR</summary>
+      <div class="box" style="margin:8px 0 0;text-align:center"><div data-qr="<?= h(base_dir_url() . '/join.php?code=' . $c['code']) ?>" style="width:190px;margin:auto"></div><p class="muted">Show this to the user. They scan it with the phone camera and tap the link: HMS opens with the code filled in.</p></div></details></td>
 </tr>
 <?php endforeach; if (!$codes): ?><tr><td colspan="6" class="muted">No codes yet. Create one below.</td></tr><?php endif; ?>
 </table>
@@ -117,4 +119,8 @@ You choose how many devices may join and until when. Both can be changed later.<
   <p>1. The download link: <a href="<?= h($dl) ?>"><span class="mono"><?= h($dl) ?></span></a><br>2. Their access code. They type it the first time they open HMS.</p>
   <p class="muted">The clinic's own expiry also applies; the earliest date always wins. A code that has expired stops new devices from joining. Deleting a device under <a href="index.php">PCs</a> frees its place on the code (and, with "Require an access code" on, locks that device until it joins again).</p>
 </div>
+<?php $qrLib = @file_get_contents(__DIR__ . '/../lib/qrcode.js'); if ($qrLib): // draws the QR codes in the browser (MIT library, no outside request) ?>
+<script nonce="<?= csp_nonce() ?>"><?= $qrLib ?></script>
+<script nonce="<?= csp_nonce() ?>">document.querySelectorAll('[data-qr]').forEach(function(el){try{var q=qrcode(0,'M');q.addData(el.getAttribute('data-qr'));q.make();el.innerHTML=q.createSvgTag(5,2);}catch(e){}});</script>
+<?php endif; ?>
 <?php page_footer();
