@@ -1401,6 +1401,13 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "HMS refused the " + what + " request from " + origin + ".", Toast.LENGTH_LONG).show();
     }
 
+    private String webViewVersion() {
+        try {
+            android.content.pm.PackageInfo pi = WebViewCompat.getCurrentWebViewPackage(this);
+            return pi == null ? "unknown" : pi.versionName;
+        } catch (Exception e) { return "unknown"; }
+    }
+
     private boolean granted(String perm) {
         return Build.VERSION.SDK_INT < 23 || checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED;
     }
@@ -1421,12 +1428,26 @@ public class MainActivity extends Activity {
 
     private void grantAvailable(PermissionRequest request) {
         List<String> ok = new ArrayList<>();
+        String off = null;
         for (String r : request.getResources()) {
-            if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(r) && granted(Manifest.permission.CAMERA)) ok.add(r);
-            if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r) && granted(Manifest.permission.RECORD_AUDIO)) ok.add(r);
+            if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(r)) { if (granted(Manifest.permission.CAMERA)) ok.add(r); else off = "camera"; }
+            if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) { if (granted(Manifest.permission.RECORD_AUDIO)) ok.add(r); else if (off == null) off = "microphone"; }
         }
         if (ok.isEmpty()) request.deny();
         else request.grant(ok.toArray(new String[0]));
+        if (off != null) androidPermissionOff(off);
+    }
+
+    /** Android itself has the permission switched off for HMS: say so and open the right settings page. */
+    private void androidPermissionOff(String what) {
+        recordError("Android permission for " + what + " is off for HMS");
+        if (isFinishing()) return;
+        new AlertDialog.Builder(this).setTitle("Allow the " + what + " for HMS")
+                .setMessage("Android has the " + what + " switched off for the HMS app, so the page cannot use it. Open the app settings, tap Permissions, and allow " + what + " (choose \"Allow while using the app\"). Then come back and try again.")
+                .setPositiveButton("Open settings", (d, w) -> {
+                    try { startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()))); } catch (Exception ignored) { }
+                })
+                .setNegativeButton("Not now", null).show();
     }
 
     /** Android lets an app ask for its permissions the first time it opens; do it all at once so the site never has to wait. */
@@ -1455,6 +1476,7 @@ public class MainActivity extends Activity {
         } else if (code == REQ_GEO && pendingGeoCb != null) {
             boolean ok = granted(Manifest.permission.ACCESS_FINE_LOCATION) || granted(Manifest.permission.ACCESS_COARSE_LOCATION);
             pendingGeoCb.invoke(pendingGeoOrigin, ok, false);
+            if (!ok) androidPermissionOff("location");
             pendingGeoCb = null;
             pendingGeoOrigin = null;
         }
@@ -1547,6 +1569,8 @@ public class MainActivity extends Activity {
                         .setMessage("Version " + BuildConfig.VERSION_NAME + "\nSite: " + (loadedBase == null ? "-" : loadedBase)
                                 + "\nRoles: " + tabs.size() + (multiProfile ? " (separate logins)" : " (only one works: update WebView)")
                                 + "\nAccess until: " + until + "\nDevice ID: " + policy.installId
+                                + "\nAndroid permissions: camera " + (granted(Manifest.permission.CAMERA) ? "on" : "OFF") + ", microphone " + (granted(Manifest.permission.RECORD_AUDIO) ? "on" : "OFF") + ", location " + (granted(Manifest.permission.ACCESS_FINE_LOCATION) || granted(Manifest.permission.ACCESS_COARSE_LOCATION) ? "on" : "OFF")
+                                + "\nAndroid " + Build.VERSION.RELEASE + ", WebView " + webViewVersion()
                                 + (err != null ? "\nLast server check failed: " + err : ""))
                         .setPositiveButton("OK", null).show();
                 return true;
