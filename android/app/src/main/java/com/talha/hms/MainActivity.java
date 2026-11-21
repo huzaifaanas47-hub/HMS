@@ -1112,6 +1112,18 @@ public class MainActivity extends Activity {
         private boolean trusted() { String u = owner.getUrl(); return u != null && isAllowed(u); }
 
         @JavascriptInterface
+        public void diag(final String report) {
+            runOnUiThread(() -> {
+                if (!trusted() || isFinishing()) return;
+                String r = report == null ? "" : report;
+                if (r.length() > 800) r = r.substring(0, 800);
+                recordError("Camera/location test: " + r);
+                new AlertDialog.Builder(MainActivity.this).setTitle("Camera & location test").setMessage(r.replace(",\"", "\n\"").replace("{", "").replace("}", ""))
+                        .setPositiveButton("OK", null).show();
+            });
+        }
+
+        @JavascriptInterface
         public void print() { runOnUiThread(() -> { if (trusted()) printWebView(owner); }); }
 
         @JavascriptInterface
@@ -1401,6 +1413,15 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "HMS refused the " + what + " request from " + origin + ".", Toast.LENGTH_LONG).show();
     }
 
+    /** Runs the same camera and location requests a page makes, and reports exactly what the system answers. */
+    private static final String CAM_TEST_JS = "(async function(){var r={};try{r.secure=window.isSecureContext;r.page=location.protocol+'//'+location.host;r.topFrame=(window.top===window);"
+        + "r.hasMediaDevices=!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia);}catch(e){}"
+        + "try{r.permCamera=(await navigator.permissions.query({name:'camera'})).state}catch(e){r.permCamera='n/a '+e.name}"
+        + "try{r.permLocation=(await navigator.permissions.query({name:'geolocation'})).state}catch(e){r.permLocation='n/a '+e.name}"
+        + "try{var s=await navigator.mediaDevices.getUserMedia({video:true});s.getTracks().forEach(function(t){t.stop()});r.camera='works'}catch(e){r.camera=(e&&e.name)+': '+(e&&e.message)}"
+        + "await new Promise(function(res){try{navigator.geolocation.getCurrentPosition(function(){r.location='works';res()},function(e){r.location='error '+e.code+': '+e.message;res()},{timeout:9000})}catch(e){r.location='threw '+e.name;res()}});"
+        + "try{HmsApp.diag(JSON.stringify(r))}catch(e){}})();";
+
     private String webViewVersion() {
         try {
             android.content.pm.PackageInfo pi = WebViewCompat.getCurrentWebViewPackage(this);
@@ -1510,6 +1531,7 @@ public class MainActivity extends Activity {
         m.add(Menu.NONE, 5, 6, "About");
         m.add(Menu.NONE, 9, 5, "Print / Save as PDF");
         if (lastState.supportPhone != null || lastState.supportWhatsapp != null) m.add(Menu.NONE, 10, 5, "Help");
+        m.add(Menu.NONE, 11, 7, "Test camera & location");
         m.add(Menu.NONE, 8, 7, appLockOn() ? "App lock: ON (tap to turn off)" : "App lock: OFF (tap to turn on)");
     }
 
@@ -1555,6 +1577,12 @@ public class MainActivity extends Activity {
                 return true;
             case 8:
                 toggleAppLock();
+                return true;
+            case 11:
+                if (a != null && a.web != null && "ok".equals(lastState.state)) {
+                    Toast.makeText(this, "Testing... allow anything Android asks for.", Toast.LENGTH_SHORT).show();
+                    a.web.evaluateJavascript(CAM_TEST_JS, null);
+                }
                 return true;
             case 9:
                 if (a != null && a.web != null) printWebView(a.web);
