@@ -1045,7 +1045,7 @@ public class MainActivity extends Activity {
 
             @Override
             public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback cb) {
-                if (!isAllowed(origin)) { cb.invoke(origin, false, false); return; }
+                if (!trustedForPermission(origin)) { permissionRefused("location", origin); cb.invoke(origin, false, false); return; }
                 if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     pendingGeoCb = cb;
                     pendingGeoOrigin = origin;
@@ -1369,13 +1369,45 @@ public class MainActivity extends Activity {
         return o != null && allowedOrigins.contains(o);
     }
 
+    /**
+     * The site may use camera, microphone and location when the page is on the HMS site. "On the HMS site" is wider than the exact
+     * address typed in the app: a site that redirects (example.com -> www.example.com), a sub-domain, or the page a role is showing
+     * right now all count, because the app only ever opens pages of the configured site in a role.
+     */
+    private boolean trustedForPermission(String origin) {
+        if (origin == null) return false;
+        if (isAllowed(origin)) return true;
+        String o = originOf(origin);
+        if (o == null) return false;
+        String host = Uri.parse(o).getHost();
+        for (String a : allowedOrigins) if (sameSite(host, Uri.parse(a).getHost())) return true;
+        for (Tab t : tabs) {
+            if (t.web == null) continue;
+            String u = t.web.getUrl();
+            if (u != null && o.equals(originOf(u))) return true;
+        }
+        return false;
+    }
+
+    private static boolean sameSite(String x, String y) {
+        if (x == null || y == null) return false;
+        x = x.toLowerCase().replaceFirst("^www\\.", "");
+        y = y.toLowerCase().replaceFirst("^www\\.", "");
+        return x.equals(y) || x.endsWith("." + y) || y.endsWith("." + x);
+    }
+
+    private void permissionRefused(String what, String origin) {
+        recordError("Site " + what + " request refused: " + origin + " is not the configured site (" + allowedOrigins + ")");
+        Toast.makeText(this, "HMS refused the " + what + " request from " + origin + ".", Toast.LENGTH_LONG).show();
+    }
+
     private boolean granted(String perm) {
         return Build.VERSION.SDK_INT < 23 || checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED;
     }
 
     /** Camera and microphone for the site: the website asks, we make sure Android has allowed the app. */
     private void handleMediaRequest(PermissionRequest request) {
-        if (!isAllowed(request.getOrigin().toString())) { request.deny(); return; }
+        if (!trustedForPermission(request.getOrigin().toString())) { permissionRefused("camera/microphone", request.getOrigin().toString()); request.deny(); return; }
         List<String> missing = new ArrayList<>();
         for (String r : request.getResources()) {
             if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(r) && !granted(Manifest.permission.CAMERA)) missing.add(Manifest.permission.CAMERA);
