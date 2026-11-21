@@ -64,6 +64,8 @@ body { display: flex; flex-direction: column; overflow: hidden; user-select: non
 .chip.secure   { color: var(--ok);     background: rgba(52, 211, 153, .10); border-color: rgba(52, 211, 153, .26); }
 .chip.local    { color: var(--warn);   background: rgba(251, 191, 36, .10); border-color: rgba(251, 191, 36, .28); }
 .chip.insecure { color: var(--danger); background: rgba(248, 113, 113, .12); border-color: rgba(248, 113, 113, .32); }
+.chip.help     { color: #86efac; background: rgba(34, 197, 94, .14); border-color: rgba(34, 197, 94, .35); cursor: pointer; font-family: inherit; }
+.chip.help:hover { background: rgba(34, 197, 94, .24); }
 .chip.update   { color: #7dd3fc; background: rgba(56, 189, 248, .14); border-color: rgba(56, 189, 248, .35); cursor: pointer; font-family: inherit; }
 .chip.update:hover { background: rgba(56, 189, 248, .24); }
 .chip.warn     { color: var(--warn);   background: rgba(251, 191, 36, .12); border-color: rgba(251, 191, 36, .28); }

@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import android.os.Build;
 import android.util.Base64;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -30,6 +31,7 @@ final class Policy {
         String notice; // admin notice for this clinic (e.g. maintenance); null = none
         long expiresAt = 0; // 0 = no expiry
         String updateVersion, updateUrl, updateNotes; // a newer build uploaded by the admin (null = none)
+        String supportPhone, supportWhatsapp; // the clinic's Help contact (null = none)
         String updateFile, updateSha; // direct APK link + SHA-256 for the in-app download (null = not offered)
     }
 
@@ -106,6 +108,12 @@ final class Policy {
         out.baseUrl = str(p, "baseUrl");
         out.message = str(p, "message");
         out.notice = str(p, "notice");
+        JSONObject sup = p.optJSONObject("support");
+        if (sup != null) {
+            String ph = str(sup, "phone"), wa = str(sup, "whatsapp");
+            if (ph != null && ph.matches("[0-9+ ()-]{3,30}")) out.supportPhone = ph;
+            if (wa != null && wa.matches("[0-9+ ()-]{3,30}")) out.supportWhatsapp = wa;
+        }
         out.expiresAt = p.isNull("expiresAt") ? 0 : p.optLong("expiresAt", 0);
         JSONObject up = p.optJSONObject("update"); // signed announcement of a newer build; compared here too so a cached answer stops showing it once updated
         if (up != null) {
@@ -128,6 +136,40 @@ final class Policy {
         else if (grace > 0 && t - p.optLong("serverTime", 0) > grace * DAY) out.state = "stale";
         sp.edit().putLong("lastSeen", lastSeen).apply();
         return out;
+    }
+
+    /** Keeps a short technical note of a problem; it is sent to the admin panel with the next check-in. Synchronous: it may run while the app crashes. */
+    static synchronized void queueError(SharedPreferences sp, String message) {
+        try {
+            String m = message == null ? "" : message.replaceAll("\\s+", " ").trim();
+            if (m.isEmpty()) return;
+            if (m.length() > 400) m = m.substring(0, 400);
+            JSONArray list = new JSONArray(sp.getString("pendingErrors", "[]"));
+            if (list.length() > 0 && m.equals(list.getJSONObject(list.length() - 1).optString("m"))) return; // same problem again
+            list.put(new JSONObject().put("t", System.currentTimeMillis()).put("m", m));
+            JSONArray keep = new JSONArray();
+            for (int i = Math.max(0, list.length() - 10); i < list.length(); i++) keep.put(list.get(i));
+            sp.edit().putString("pendingErrors", keep.toString()).commit();
+        } catch (Exception ignored) { /* reporting must never cause another problem */ }
+    }
+
+    private synchronized JSONArray pendingErrors(int max) {
+        JSONArray out = new JSONArray();
+        try {
+            JSONArray list = new JSONArray(sp.getString("pendingErrors", "[]"));
+            for (int i = 0; i < list.length() && out.length() < max; i++) out.put(list.get(i));
+        } catch (Exception ignored) { }
+        return out;
+    }
+
+    private synchronized void dropErrors(int n) {
+        if (n <= 0) return;
+        try {
+            JSONArray list = new JSONArray(sp.getString("pendingErrors", "[]"));
+            JSONArray rest = new JSONArray();
+            for (int i = n; i < list.length(); i++) rest.put(list.get(i));
+            sp.edit().putString("pendingErrors", rest.toString()).apply();
+        } catch (Exception ignored) { }
     }
 
     private JSONObject deviceBody(String nonce) throws Exception {
@@ -181,7 +223,10 @@ final class Policy {
         if (!active) return null;
         try {
             String nonce = newNonce();
-            Resp r = post(policyUrl, deviceBody(nonce));
+            JSONObject body = deviceBody(nonce);
+            JSONArray pending = pendingErrors(3); // problems the app hit since the last check-in
+            if (pending.length() > 0) body.put("errors", pending);
+            Resp r = post(policyUrl, body);
             if (r.code != 200) throw new Exception("HTTP " + r.code);
             JSONObject env = new JSONObject(r.body);
             String payload = env.optString("payload", null);
@@ -192,6 +237,7 @@ final class Policy {
             }
             lastSeen = Math.max(Math.max(lastSeen, p.optLong("serverTime", 0)), System.currentTimeMillis());
             sp.edit().putString("payload", payload).putString("sig", sig).putBoolean("verifiedOnce", true).putLong("lastSeen", lastSeen).apply();
+            dropErrors(pending.length()); // delivered
             lastError = null;
             return null;
         } catch (Exception e) {

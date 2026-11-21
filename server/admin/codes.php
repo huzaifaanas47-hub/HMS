@@ -21,6 +21,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $pdo->prepare('INSERT INTO enroll_codes (code, clinic_id, note, max_uses, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
                         ->execute([$code, $cid, clip($_POST['note'] ?? '', 120) ?: null, $max, $exp, gmdate('Y-m-d H:i:s')]);
                     flash('Code ' . code_pretty($code) . ' created. Give it to the users together with the download link.');
+                    log_activity('Code created', code_pretty($code) . ' for ' . clinic_get($cid)['name'] . ', up to ' . $max . ' devices');
                     $done = true;
                 } catch (PDOException $e) {
                     if ((string)$e->getCode() !== '23000') { flash('The code could not be saved: ' . $e->getMessage(), 'err'); $done = true; } // only a duplicate code is retried
@@ -36,6 +37,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($act === 'delete') {
         $pdo->prepare('UPDATE installs SET code_id = NULL WHERE code_id = ?')->execute([$id]);
         $pdo->prepare('DELETE FROM enroll_codes WHERE id = ?')->execute([$id]);
+        log_activity('Code deleted', code_pretty($row['code']));
         flash('Code deleted. Devices that used it keep working under their clinic, but lose the code\'s expiry date.');
     } elseif ($act === 'extend') {
         $days = max(1, min(3650, (int)($_POST['days'] ?? 30)));
@@ -43,6 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($cur === null) flash('This code has no end date, so there is nothing to extend. Use Edit to set an end date if you want one.', 'err');
         else {
             $pdo->prepare('UPDATE enroll_codes SET expires_at = ? WHERE id = ?')->execute([gmdate('Y-m-d H:i:s', max(time(), $cur) + $days * 86400), $id]);
+            log_activity('Code extended', code_pretty($row['code']) . ': +' . $days . ' days');
             flash("Code extended by $days days. Every device that joined with it gets the new date at its next check-in.");
         }
     } else { // save
@@ -54,6 +57,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($max < (int)$joined->fetchColumn()) { flash('The limit cannot be lower than the ' . (int)$joined->fetchColumn() . ' devices that already joined. To stop new devices, switch off "Accept new devices" instead.', 'err'); redirect('codes.php'); }
         $pdo->prepare('UPDATE enroll_codes SET max_uses = ?, expires_at = ?, is_open = ?, note = ? WHERE id = ?')->execute([
             $max, $exp, isset($_POST['is_open']) ? 1 : 0, clip($_POST['note'] ?? '', 120) ?: null, $id]);
+        log_activity('Code changed', code_pretty($row['code']) . ': limit ' . $max . ', ' . (isset($_POST['is_open']) ? 'open' : 'closed') . ($exp ? ', until ' . $exp . ' UTC' : ', no end date'));
         flash('Saved. Devices that already joined follow the new date at their next check-in.');
     }
     redirect('codes.php');

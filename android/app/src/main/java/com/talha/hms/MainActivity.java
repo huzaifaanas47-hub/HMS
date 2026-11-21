@@ -2,6 +2,22 @@ package com.talha.hms;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.Dialog;
+import android.content.ContentValues;
+import android.os.Message;
+import android.print.PrintAttributes;
+import android.print.PrintManager;
+import android.provider.MediaStore;
+import android.util.Base64;
+import android.view.KeyEvent;
+import android.webkit.DownloadListener;
+import android.webkit.JavascriptInterface;
+import android.webkit.RenderProcessGoneDetail;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.util.HashMap;
+import java.util.Map;
 import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.ActivityNotFoundException;
@@ -124,6 +140,9 @@ public class MainActivity extends Activity {
     private Policy.State lastState = new Policy.State();
 
     private ValueCallback<Uri[]> fileCallback;
+    private final Map<WebView, Dialog> popups = new HashMap<>(); // windows opened by the site (window.open / target=_blank)
+    private String bridgeJs;
+    private long lastRenderRestart;
     private PermissionRequest pendingMedia;
     private GeolocationPermissions.Callback pendingGeoCb;
     private String pendingGeoOrigin;
@@ -136,6 +155,14 @@ public class MainActivity extends Activity {
         policy = new Policy(this);
         credentials = new Credentials(this);
         sp = getSharedPreferences("hms", MODE_PRIVATE);
+        final Thread.UncaughtExceptionHandler prevHandler = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((th, ex) -> { // noted for the admin panel, then the normal crash handling continues
+            try {
+                StackTraceElement[] st = ex.getStackTrace();
+                recordError("Crash: " + ex.getClass().getSimpleName() + ": " + ex.getMessage() + (st.length > 0 ? " at " + st[0] : ""));
+            } catch (Throwable ignored) { }
+            if (prevHandler != null) prevHandler.uncaughtException(th, ex);
+        });
         multiProfile = WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE);
         setUpEdgeToEdge();
         applyAppLockFlags();
@@ -956,6 +983,9 @@ public class MainActivity extends Activity {
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
         s.setGeolocationEnabled(true);
+        s.setSupportMultipleWindows(true);
+        s.setJavaScriptCanOpenWindowsAutomatically(true);
+        web.addJavascriptInterface(new HmsBridge(web), "HmsApp");
         CookieManager cm = cookies(t);
         cm.setAcceptCookie(true);
         cm.setAcceptThirdPartyCookies(web, true);
@@ -982,10 +1012,32 @@ public class MainActivity extends Activity {
 
             // Every page load (app start, after a log out, any redirect to the login page) fills this role's saved login.
             @Override
-            public void onPageFinished(WebView v, String url) { autofill(t, v, url); }
+            public void onPageStarted(WebView v, String url, android.graphics.Bitmap icon) { injectBridge(v, url); }
+
+            @Override
+            public void onPageFinished(WebView v, String url) { injectBridge(v, url); autofill(t, v, url); }
+
+            // The WebView's helper process died (memory, crash): without this the whole app would be killed.
+            @android.annotation.TargetApi(26)
+            @Override
+            public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail d) {
+                recordError("The page engine " + (d.didCrash() ? "crashed" : "was stopped by the system") + "; the app reloaded itself.");
+                long now = System.currentTimeMillis();
+                if (now - lastRenderRestart > 30000) { lastRenderRestart = now; ui.post(() -> { if (!isFinishing()) recreate(); }); }
+                return true;
+            }
         });
 
-        web.setWebChromeClient(new WebChromeClient() {
+        web.setWebChromeClient(chromeClient(t));
+
+        web.setDownloadListener(downloadListener(t, web));
+        return web;
+    }
+
+
+    /** Chrome client shared by the role pages and by the windows they open: camera, microphone, location, file choosers, popups. */
+    private WebChromeClient chromeClient(final Tab t) {
+        return new WebChromeClient() {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
                 runOnUiThread(() -> handleMediaRequest(request));
@@ -1015,9 +1067,25 @@ public class MainActivity extends Activity {
                 }
                 return true;
             }
-        });
 
-        web.setDownloadListener((url, ua, cd, mime, len) -> {
+            @Override
+            public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
+                return openPopup(t, resultMsg);
+            }
+
+            @Override
+            public void onCloseWindow(WebView window) { closePopup(window); }
+        };
+    }
+
+    /** Downloads: normal links go to the system downloader; blob:/data: files (generated PDFs, exports) are saved by the page bridge. */
+    private DownloadListener downloadListener(final Tab t, final WebView owner) {
+        return (url, ua, cd, mime, len) -> {
+            if (url != null && (url.startsWith("blob:") || url.startsWith("data:"))) {
+                String name = URLUtil.guessFileName(url, cd, mime);
+                owner.evaluateJavascript("window.__hmsSaveUrl&&window.__hmsSaveUrl(" + JSONObject.quote(url) + "," + JSONObject.quote(name) + "," + JSONObject.quote(mime == null ? "" : mime) + ")", null);
+                return;
+            }
             try {
                 DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
                 r.setMimeType(mime);
@@ -1031,8 +1099,228 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 Toast.makeText(this, "The download could not start.", Toast.LENGTH_LONG).show();
             }
+        };
+    }
+
+    // ------------------------------------------------------------------ print, save files, popups, help
+
+    /** What the site can call from JavaScript (window.HmsApp): print, and save a generated file to Downloads. Only works on the HMS site itself. */
+    private final class HmsBridge {
+        private final WebView owner;
+        HmsBridge(WebView owner) { this.owner = owner; }
+
+        private boolean trusted() { String u = owner.getUrl(); return u != null && isAllowed(u); }
+
+        @JavascriptInterface
+        public void print() { runOnUiThread(() -> { if (trusted()) printWebView(owner); }); }
+
+        @JavascriptInterface
+        public void saveFile(final String name, final String mime, final String base64) {
+            if (base64 == null || base64.length() > 60_000_000) return; // about 45 MB of file
+            runOnUiThread(() -> { if (trusted()) new Thread(() -> saveBytes(name, mime, base64)).start(); });
+        }
+    }
+
+    private String bridgeScript() {
+        if (bridgeJs == null) {
+            try (InputStream in = getAssets().open("hmsbridge.js")) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                bridgeJs = out.toString("UTF-8");
+            } catch (Exception e) { return null; }
+        }
+        return bridgeJs;
+    }
+
+    private void injectBridge(WebView v, String url) {
+        if (url == null || !isAllowed(url)) return;
+        String js = bridgeScript();
+        if (js != null) v.evaluateJavascript(js, null);
+    }
+
+    /** Opens Android's print screen for the page: any printer the phone knows, or "Save as PDF". */
+    private void printWebView(WebView w) {
+        try {
+            String title = w.getTitle();
+            String name = "HMS - " + (title == null || title.trim().isEmpty() ? "page" : title.trim());
+            PrintManager pm = (PrintManager) getSystemService(Context.PRINT_SERVICE);
+            pm.print(name, w.createPrintDocumentAdapter(name), new PrintAttributes.Builder().build());
+        } catch (Exception e) {
+            recordError("Print failed: " + e.getMessage());
+            Toast.makeText(this, "Printing is not available on this phone.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private static String extFor(String mime) {
+        if (mime == null) return "";
+        String m = mime.toLowerCase();
+        if (m.contains("pdf")) return ".pdf";
+        if (m.contains("png")) return ".png";
+        if (m.contains("jpeg") || m.contains("jpg")) return ".jpg";
+        if (m.contains("csv")) return ".csv";
+        if (m.contains("html")) return ".html";
+        if (m.contains("plain")) return ".txt";
+        if (m.contains("spreadsheetml")) return ".xlsx";
+        if (m.contains("excel")) return ".xls";
+        if (m.contains("wordprocessingml")) return ".docx";
+        if (m.contains("json")) return ".json";
+        return "";
+    }
+
+    private static File uniqueFile(File dir, String name) {
+        File f = new File(dir, name);
+        if (!f.exists()) return f;
+        int dot = name.lastIndexOf('.');
+        String base = dot > 0 ? name.substring(0, dot) : name, ext = dot > 0 ? name.substring(dot) : "";
+        for (int i = 1; i < 1000; i++) {
+            f = new File(dir, base + " (" + i + ")" + ext);
+            if (!f.exists()) return f;
+        }
+        return new File(dir, base + "-" + System.currentTimeMillis() + ext);
+    }
+
+    /** Writes a file the page generated (PDF, Excel, image ...) to the Downloads folder. Needs no permission on Android 10 and newer. */
+    private void saveBytes(String name, String mime, String base64) {
+        try {
+            byte[] data = Base64.decode(base64, Base64.DEFAULT);
+            String clean = (name == null ? "" : name).replaceAll("[\\\\/:*?\"<>|\\r\\n]+", "_").trim();
+            if (clean.isEmpty()) clean = "HMS-download";
+            if (!clean.contains(".")) clean += extFor(mime);
+            final String fileName = clean;
+            final String type = (mime == null || mime.isEmpty()) ? "application/octet-stream" : mime;
+            Uri saved = null;
+            if (Build.VERSION.SDK_INT >= 29) {
+                ContentValues v = new ContentValues();
+                v.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
+                v.put(MediaStore.Downloads.MIME_TYPE, type);
+                v.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+                saved = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                if (saved == null) throw new IOException("Downloads is not available");
+                try (OutputStream os = getContentResolver().openOutputStream(saved)) { os.write(data); }
+            } else {
+                File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                //noinspection ResultOfMethodCallIgnored
+                dir.mkdirs();
+                try (FileOutputStream os = new FileOutputStream(uniqueFile(dir, fileName))) { os.write(data); }
+            }
+            final Uri openUri = saved;
+            runOnUiThread(() -> {
+                Toast.makeText(this, "Saved to Downloads: " + fileName, Toast.LENGTH_LONG).show();
+                if (openUri != null && (type.contains("pdf") || type.startsWith("image/"))) { // show a saved PDF / picture straight away
+                    try {
+                        Intent i = new Intent(Intent.ACTION_VIEW).setDataAndType(openUri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(i);
+                    } catch (Exception ignored) { /* no viewer installed: the file is still in Downloads */ }
+                }
+            });
+        } catch (Exception e) {
+            recordError("Saving a file failed: " + e.getMessage());
+            runOnUiThread(() -> Toast.makeText(this, "The file could not be saved.", Toast.LENGTH_LONG).show());
+        }
+    }
+
+    /** window.open / target="_blank" from the HMS site (a report, a print view): shown in a full-screen window with Print and Close. */
+    private boolean openPopup(final Tab t, Message resultMsg) {
+        if (resultMsg == null || !(resultMsg.obj instanceof WebView.WebViewTransport)) return false;
+        final WebView pop = new WebView(this);
+        if (multiProfile) {
+            try { WebViewCompat.setProfile(pop, t.profile()); } catch (Exception ignored) { }
+        }
+        WebSettings ps = pop.getSettings();
+        ps.setJavaScriptEnabled(true);
+        ps.setDomStorageEnabled(true);
+        ps.setMediaPlaybackRequiresUserGesture(false);
+        ps.setAllowFileAccess(false);
+        ps.setAllowContentAccess(false);
+        ps.setGeolocationEnabled(true);
+        ps.setSupportMultipleWindows(true);
+        ps.setJavaScriptCanOpenWindowsAutomatically(true);
+        cookies(t).setAcceptThirdPartyCookies(pop, true);
+        pop.addJavascriptInterface(new HmsBridge(pop), "HmsApp");
+        pop.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
+                String u = r.getUrl().toString();
+                if (isAllowed(u) || u.startsWith("about:") || u.startsWith("blob:")) return false;
+                try { startActivity(new Intent(Intent.ACTION_VIEW, r.getUrl())); } catch (ActivityNotFoundException ignored) { }
+                closePopup(pop);
+                return true;
+            }
+
+            @Override
+            public void onPageStarted(WebView v, String url, android.graphics.Bitmap icon) { injectBridge(v, url); }
+
+            @Override
+            public void onPageFinished(WebView v, String url) { injectBridge(v, url); }
         });
-        return web;
+        pop.setWebChromeClient(chromeClient(t));
+        pop.setDownloadListener(downloadListener(t, pop));
+
+        final Dialog d = new Dialog(this, android.R.style.Theme_Material_Light_NoActionBar);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setBackgroundColor(Color.parseColor("#0F1420"));
+        bar.setPadding(12, 12, 12, 12);
+        Button printBtn = new Button(this);
+        printBtn.setText("Print / Save PDF");
+        printBtn.setOnClickListener(v -> printWebView(pop));
+        Button closeBtn = new Button(this);
+        closeBtn.setText("Close");
+        closeBtn.setOnClickListener(v -> closePopup(pop));
+        bar.addView(printBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        bar.addView(closeBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(pop, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        d.setContentView(root);
+        d.setOnKeyListener((di, key, ev) -> {
+            if (key == KeyEvent.KEYCODE_BACK && ev.getAction() == KeyEvent.ACTION_UP) {
+                if (pop.canGoBack()) pop.goBack(); else closePopup(pop);
+                return true;
+            }
+            return false;
+        });
+        d.setOnDismissListener(di -> { popups.remove(pop); pop.destroy(); });
+        popups.put(pop, d);
+        d.show();
+        if (d.getWindow() != null) d.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+
+        WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
+        transport.setWebView(pop);
+        resultMsg.sendToTarget();
+        return true;
+    }
+
+    private void closePopup(final WebView w) {
+        ui.post(() -> { // never destroy a WebView from inside one of its own callbacks
+            Dialog d = popups.get(w);
+            if (d != null) d.dismiss();
+        });
+    }
+
+    private void recordError(String message) {
+        if (sp == null) sp = getSharedPreferences("hms", MODE_PRIVATE);
+        Policy.queueError(sp, message);
+    }
+
+    /** The Help button: the clinic's phone / WhatsApp number from the signed answer of the admin server. */
+    private void helpDialog() {
+        final String phone = lastState.supportPhone, wa = lastState.supportWhatsapp;
+        if (phone == null && wa == null) return;
+        StringBuilder msg = new StringBuilder();
+        if (phone != null) msg.append("Phone: ").append(phone).append('\n');
+        if (wa != null) msg.append("WhatsApp: ").append(wa);
+        AlertDialog.Builder b = new AlertDialog.Builder(this).setTitle("Need help with HMS?").setMessage(msg.toString().trim()).setNeutralButton("Close", null);
+        if (phone != null) b.setPositiveButton("Call", (x, y) -> {
+            try { startActivity(new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(phone)))); } catch (ActivityNotFoundException ignored) { }
+        });
+        if (wa != null) b.setNegativeButton("WhatsApp", (x, y) -> {
+            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/" + wa.replaceAll("\\D", "")))); } catch (ActivityNotFoundException ignored) { }
+        });
+        b.show();
     }
 
     // ------------------------------------------------------------------ saved login autofill
@@ -1111,12 +1399,18 @@ public class MainActivity extends Activity {
 
     /** Android lets an app ask for its permissions the first time it opens; do it all at once so the site never has to wait. */
     private void askAllPermissionsOnce() {
-        if (Build.VERSION.SDK_INT < 23 || sp.getBoolean("permsAsked", false)) return;
+        if (Build.VERSION.SDK_INT < 23 || sp.getBoolean("permsAsked2", false)) return;
         List<String> need = new ArrayList<>();
         String[] all = {Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION};
         for (String p : all) if (!granted(p)) need.add(p);
         if (Build.VERSION.SDK_INT >= 33 && !granted("android.permission.POST_NOTIFICATIONS")) need.add("android.permission.POST_NOTIFICATIONS");
-        sp.edit().putBoolean("permsAsked", true).apply();
+        // files: older Android needs storage access for downloads and the file picker, Android 13+ asks for photos / videos / audio
+        if (Build.VERSION.SDK_INT <= 28 && !granted(Manifest.permission.WRITE_EXTERNAL_STORAGE)) need.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        if (Build.VERSION.SDK_INT <= 32 && !granted(Manifest.permission.READ_EXTERNAL_STORAGE)) need.add(Manifest.permission.READ_EXTERNAL_STORAGE);
+        if (Build.VERSION.SDK_INT >= 33) {
+            for (String m : new String[]{"android.permission.READ_MEDIA_IMAGES", "android.permission.READ_MEDIA_VIDEO", "android.permission.READ_MEDIA_AUDIO"}) if (!granted(m)) need.add(m);
+        }
+        sp.edit().putBoolean("permsAsked2", true).apply();
         if (!need.isEmpty()) requestPermissions(need.toArray(new String[0]), REQ_FIRST_RUN);
     }
 
@@ -1160,6 +1454,8 @@ public class MainActivity extends Activity {
         m.add(Menu.NONE, 3, 4, "Log out this role");
         m.add(Menu.NONE, 4, 5, "Log out all roles");
         m.add(Menu.NONE, 5, 6, "About");
+        m.add(Menu.NONE, 9, 5, "Print / Save as PDF");
+        if (lastState.supportPhone != null || lastState.supportWhatsapp != null) m.add(Menu.NONE, 10, 5, "Help");
         m.add(Menu.NONE, 8, 7, appLockOn() ? "App lock: ON (tap to turn off)" : "App lock: OFF (tap to turn on)");
     }
 
@@ -1205,6 +1501,12 @@ public class MainActivity extends Activity {
                 return true;
             case 8:
                 toggleAppLock();
+                return true;
+            case 9:
+                if (a != null && a.web != null) printWebView(a.web);
+                return true;
+            case 10:
+                helpDialog();
                 return true;
             case 5:
                 String until = lastState.expiresAt > 0 ? DateFormat.getDateTimeInstance().format(new Date(lastState.expiresAt)) : "no end date";

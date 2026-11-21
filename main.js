@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, WebContentsView, ipcMain, Menu, session, shell, dialog, systemPreferences } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, Menu, session, shell, dialog, systemPreferences, clipboard, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { fileURLToPath } = require('url');
@@ -17,6 +17,23 @@ const LEGACY_CONFIG_NAME = 'multirole-config'; // pre-HMS name of the config fil
 
 const store = new Store({ name: 'hms-config' });
 const creds = createCredentials(store);
+
+/* ------------------------------------------------------ error reports */
+
+// Keeps a short technical note of a problem; the policy check sends it to the admin panel with the next check-in
+// (Devices > this device > Error reports). Only the app's own failures are noted - never page content or what a user typed.
+function queueError(message) {
+  try {
+    const m = String(message || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+    if (!m) return;
+    const list = store.get('pendingErrors', []) || [];
+    if (list.length && list[list.length - 1].m === m) return; // same problem again: one note is enough
+    list.push({ t: Date.now(), m });
+    store.set('pendingErrors', list.slice(-10));
+  } catch (e) { /* reporting must never cause another problem */ }
+}
+process.on('uncaughtException', (err) => { console.error(err); queueError('Uncaught error: ' + String((err && err.stack) || err).split('\n').slice(0, 3).join(' | ')); });
+process.on('unhandledRejection', (r) => { console.error(r); queueError('Unhandled rejection: ' + String((r && r.stack) || r).split('\n').slice(0, 3).join(' | ')); });
 
 let policy = null;
 let mainWindow = null;
@@ -154,10 +171,28 @@ function guardContents(contents) {
     return { action: 'deny' };
   });
   contents.on('did-create-window', (win) => guardContents(win.webContents));
+  attachContextMenu(contents);
 }
 
 // What the HMS site may use (only on the configured site origins): camera + microphone ('media'), location, notifications, clipboard, fullscreen.
-const ALLOWED_PERMISSIONS = new Set(['fullscreen', 'clipboard-sanitized-write', 'clipboard-read', 'notifications', 'media', 'geolocation']);
+const ALLOWED_PERMISSIONS = new Set([
+  'fullscreen', 'clipboard-sanitized-write', 'clipboard-read', 'notifications', 'media', 'geolocation',
+  'fileSystem',                                   // save / open files from the page (File System Access API)
+  'midi', 'midiSysex', 'pointerLock', 'keyboardLock', 'idle-detection', 'speaker-selection', 'mediaKeySystem',
+  'storage-access', 'top-level-storage-access', 'window-management'
+]);
+const DEVICE_TYPES = new Set(['usb', 'serial', 'hid']); // receipt / label printers, scanners, card readers the page asks for
+
+// Lets the person pick the device the page asked for (USB / serial / HID printers, scanners ...).
+function chooseDevice(title, items, labelOf) {
+  if (!items.length) return Promise.resolve(null);
+  const shown = items.slice(0, 8);
+  const buttons = shown.map(labelOf).concat('Cancel');
+  const opts = { type: 'question', title, message: title, detail: 'Choose the device HMS should use.', buttons, cancelId: buttons.length - 1, defaultId: 0, noLink: true };
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  return (parent ? dialog.showMessageBox(parent, opts) : dialog.showMessageBox(opts)).then((r) => (r.response < shown.length ? shown[r.response] : null)).catch(() => null);
+}
+
 
 function hardenSession(ses, partition) {
   if (hardenedSessions.has(partition)) return;
@@ -167,6 +202,67 @@ function hardenSession(ses, partition) {
   });
   ses.setPermissionCheckHandler((wc, permission, requestingOrigin) => {
     return ALLOWED_PERMISSIONS.has(permission) && isAllowedUrl(requestingOrigin);
+  });
+  ses.setDevicePermissionHandler((details) => DEVICE_TYPES.has(details.deviceType) && isAllowedUrl(details.origin || ''));
+  ses.on('select-usb-device', (event, details, callback) => {
+    event.preventDefault();
+    if (!isAllowedUrl((details.frame && details.frame.url) || '')) return callback();
+    chooseDevice('USB device', details.deviceList || [], (d) => d.productName || ('USB device ' + d.vendorId + ':' + d.productId)).then((d) => callback(d ? d.deviceId : undefined));
+  });
+  ses.on('select-hid-device', (event, details, callback) => {
+    event.preventDefault();
+    if (!isAllowedUrl((details.frame && details.frame.url) || '')) return callback();
+    chooseDevice('HID device', details.deviceList || [], (d) => d.name || ('Device ' + d.vendorId + ':' + d.productId)).then((d) => callback(d ? d.deviceId : undefined));
+  });
+  ses.on('select-serial-port', (event, portList, wc, callback) => {
+    event.preventDefault();
+    if (!isAllowedUrl(wc.getURL())) return callback('');
+    chooseDevice('Serial port', portList || [], (p) => p.displayName || p.portName || 'Serial port').then((p) => callback(p ? p.portId : ''));
+  });
+  // Downloads: the usual "save as" box, and a notification when the file is saved (click it to open the folder).
+  ses.on('will-download', (event, item) => {
+    item.once('done', (e, state) => {
+      if (state !== 'completed') { if (state === 'interrupted') queueError('A download was interrupted: ' + (item.getFilename() || 'file')); return; }
+      const file = item.getSavePath();
+      if (!file || !Notification.isSupported()) return;
+      const n = new Notification({ title: 'Download complete', body: path.basename(file) });
+      n.on('click', () => shell.showItemInFolder(file));
+      n.show();
+    });
+  });
+}
+
+/* ------------------------------------------------------ print / PDF / right-click menu */
+
+function printContents(contents) {
+  if (contents && !contents.isDestroyed()) contents.print({ printBackground: true });
+}
+
+function savePdf(contents) {
+  if (!contents || contents.isDestroyed()) return;
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  const name = (contents.getTitle() || 'HMS').replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 60) || 'HMS';
+  dialog.showSaveDialog(parent, { title: 'Save as PDF', defaultPath: path.join(app.getPath('downloads'), name + '.pdf'), filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+    .then((r) => (r.canceled || !r.filePath ? null : contents.printToPDF({ printBackground: true, preferCSSPageSize: true })
+      .then((buf) => fs.promises.writeFile(r.filePath, buf))
+      .then(() => shell.showItemInFolder(r.filePath))))
+    .catch((e) => { queueError('Save as PDF failed: ' + (e && e.message)); dialog.showErrorBox('Could not save the PDF', String((e && e.message) || e)); });
+}
+
+function attachContextMenu(contents) {
+  contents.on('context-menu', (event, params) => {
+    const items = [];
+    if (params.isEditable) {
+      items.push({ role: 'cut', enabled: params.editFlags.canCut }, { role: 'copy', enabled: params.editFlags.canCopy }, { role: 'paste', enabled: params.editFlags.canPaste }, { role: 'selectAll' }, { type: 'separator' });
+    } else if (params.selectionText) {
+      items.push({ role: 'copy' }, { type: 'separator' });
+    }
+    if (params.linkURL && /^https?:\/\//i.test(params.linkURL)) {
+      items.push({ label: 'Copy link address', click: () => clipboard.writeText(params.linkURL) }, { label: 'Open link in browser', click: () => openExternalSafe(params.linkURL) }, { type: 'separator' });
+    }
+    if (params.mediaType === 'image') items.push({ label: 'Copy image', click: () => contents.copyImageAt(params.x, params.y) }, { type: 'separator' });
+    items.push({ label: 'Print...', accelerator: 'CmdOrCtrl+P', click: () => printContents(contents) }, { label: 'Save page as PDF...', click: () => savePdf(contents) });
+    Menu.buildFromTemplate(items).popup({ window: (mainWindow && !mainWindow.isDestroyed()) ? mainWindow : undefined });
   });
 }
 
@@ -266,6 +362,12 @@ function createViewForTab(tab) {
     view.webContents.on(evt, () => { if (!view.webContents.isDestroyed()) sendTabInfo(tab.id); });
   });
   view.webContents.on('did-finish-load', () => autofillCredentials(view, tab.id));
+  view.webContents.on('did-fail-load', (e, code, desc, failedUrl, isMainFrame) => { // internet problems (offline codes) are not reported; the rest points to a server / certificate problem
+    if (!isMainFrame || [-3, -21, -101, -102, -105, -106, -109, -118, -7].includes(code)) return;
+    const u = origins.parse(failedUrl);
+    queueError('Page failed to load (' + code + ' ' + desc + ') ' + (u ? u.origin : ''));
+  });
+  view.webContents.on('render-process-gone', (e, details) => queueError('A page crashed (' + details.reason + ', exit ' + details.exitCode + ')'));
   // No internet / server unreachable: a friendly page that retries by itself instead of a blank error page.
   view.webContents.on('did-fail-load', (e, code, desc, failedUrl, isMainFrame) => {
     if (!isMainFrame || ![-21, -101, -102, -105, -106, -109, -118, -7].includes(code)) return;
@@ -404,7 +506,7 @@ async function confirmForgetLogin(tabId) {
 /* ------------------------------------------------------------------- policy */
 
 function publicPolicyState(eff) {
-  return { state: eff.state, message: eff.message, notice: eff.notice, expiresAt: eff.expiresAt, daysLeft: eff.daysLeft, update: eff.update ? { version: eff.update.version, notes: eff.update.notes } : null };
+  return { state: eff.state, message: eff.message, notice: eff.notice, expiresAt: eff.expiresAt, daysLeft: eff.daysLeft, update: eff.update ? { version: eff.update.version, notes: eff.update.notes } : null, hasHelp: !!eff.support };
 }
 
 let shownNotice = null; // the notice text already shown in this run; it appears again at the next app start while the admin keeps it
@@ -538,6 +640,9 @@ function buildMenu() {
         { label: 'Reload Current Tab', accelerator: 'CmdOrCtrl+R', click: withTab(id => views[id] && views[id].webContents.reload()) },
         { label: 'Fill Saved Login', click: withTab(id => views[id] && autofillCredentials(views[id], id)) },
         { type: 'separator' },
+        { label: 'Print...', accelerator: 'CmdOrCtrl+P', click: withTab(id => views[id] && printContents(views[id].webContents)) },
+        { label: 'Save Page as PDF...', click: withTab(id => views[id] && savePdf(views[id].webContents)) },
+        { type: 'separator' },
         { label: 'Log Out This Tab...', click: withTab(id => confirmLogout(id)) },
         { label: 'Log Out All Tabs...', click: () => confirmLogout(null) },
         { type: 'separator' },
@@ -569,6 +674,21 @@ onMain('logout-tab', (tabId) => { if (typeof tabId === 'string') confirmLogout(t
 onMain('logout-all', () => confirmLogout(null));
 onMain('recheck-policy', () => { if (policy) policy.check(); });
 // Opens the download page the admin server announced (signed). The renderer sends no URL: only the verified one is used.
+// Help button: the clinic's phone / WhatsApp number comes from the signed answer, never from the page.
+onMain('open-help', () => {
+  const s = policy && policy.evaluate().support;
+  if (!s) return;
+  const buttons = [];
+  if (s.whatsapp) buttons.push('Open WhatsApp');
+  if (s.phone) buttons.push('Copy phone number');
+  buttons.push('Close');
+  dialog.showMessageBox(mainWindow, { type: 'info', title: 'Help', message: 'Need help with HMS?', detail: [s.phone ? 'Phone: ' + s.phone : '', s.whatsapp ? 'WhatsApp: ' + s.whatsapp : ''].filter(Boolean).join('\n'), buttons, cancelId: buttons.length - 1, noLink: true })
+    .then((r) => {
+      const b = buttons[r.response];
+      if (b === 'Open WhatsApp') shell.openExternal('https://wa.me/' + s.whatsapp.replace(/\D/g, ''));
+      else if (b === 'Copy phone number') clipboard.writeText(s.phone);
+    }).catch(() => {});
+});
 onMain('open-update', () => {
   if (installDownloadedUpdate()) return; // already downloaded and checked: install it
   const u = policy && policy.getUpdate();
@@ -780,6 +900,8 @@ function setupAutoUpdate() {
 }
 
 /* ----------------------------------------------------------------------- app */
+
+app.on('child-process-gone', (e, details) => queueError('Helper process stopped: ' + details.type + ' (' + details.reason + ')'));
 
 app.whenReady().then(async () => {
   // HMS's own windows (tab bar, setup) never need camera, location, etc. Only the per-tab

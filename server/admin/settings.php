@@ -14,6 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         elseif ($new !== (string)($_POST['new_password2'] ?? '')) flash('The two new passwords do not match.', 'err');
         else {
             db()->prepare('UPDATE admins SET password_hash = ? WHERE id = ?')->execute([password_hash($new, PASSWORD_DEFAULT), $_SESSION['admin_id']]);
+            log_activity('Password changed');
             flash('Password changed.');
         }
         redirect('settings.php');
@@ -29,6 +30,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     setting_set('global_message', clip($_POST['global_message'] ?? '', 500));
     setting_set('offline_grace_days', (string)max(0, min(365, (int)($_POST['offline_grace_days'] ?? 14))));
     setting_set('stale_delete_days', (string)max(0, min(3650, (int)($_POST['stale_delete_days'] ?? 0))));
+    setting_set('support_phone', support_clean($_POST['support_phone'] ?? ''));
+    setting_set('support_whatsapp', support_clean($_POST['support_whatsapp'] ?? ''));
+    log_activity('Settings saved', 'require code ' . (isset($_POST['require_code']) ? 'on' : 'off') . ', remove devices after ' . (int)($_POST['stale_delete_days'] ?? 0) . ' days');
     flash('Settings saved. Every installed app picks them up at its next check-in (within ~10 minutes).');
     redirect('settings.php');
 }
@@ -48,6 +52,8 @@ page_header('Settings', 'settings.php');
     <div><label>Global expiry (<?= h(cfg()['timezone'] ?? 'UTC') ?>) - ends access for EVERYONE at this moment</label><input type="datetime-local" name="global_expires_at" value="<?= h(input_local($s['global_expires_at'])) ?>"></div>
     <div><label>Lock the app if it cannot reach this server for N days (0 = never)</label><input type="number" name="offline_grace_days" min="0" max="365" value="<?= h($s['offline_grace_days']) ?>"></div>
     <div><label>Remove devices not seen for N days (0 = never). Frees their place on the access code, e.g. after an uninstall</label><input type="number" name="stale_delete_days" min="0" max="3650" value="<?= h($s['stale_delete_days']) ?>"></div>
+    <div><label>Help phone number for every clinic without its own (the Help button in the app)</label><input type="text" name="support_phone" maxlength="30" value="<?= h($s['support_phone']) ?>" placeholder="+92 300 1234567"></div>
+    <div><label>Help WhatsApp number (with country code)</label><input type="text" name="support_whatsapp" maxlength="30" value="<?= h($s['support_whatsapp']) ?>" placeholder="+92 300 1234567"></div>
     <div><label>Message shown on the lock screen (unless an install has its own)</label><input type="text" name="global_message" value="<?= h($s['global_message']) ?>" maxlength="500"></div>
   </div>
   <div class="row"><button class="btn">Save settings</button></div>

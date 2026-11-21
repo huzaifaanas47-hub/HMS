@@ -84,7 +84,7 @@ function createPolicy({ store, config, appVersion, onChange }) {
 
   // -> { state: 'ok'|'expired'|'blocked'|'stale'|'enroll'|'unverified', baseUrl, message, expiresAt, daysLeft }
   function evaluate() {
-    const out = { state: 'ok', baseUrl: null, message: null, notice: null, expiresAt: null, daysLeft: null, update: null };
+    const out = { state: 'ok', baseUrl: null, message: null, notice: null, expiresAt: null, daysLeft: null, update: null, support: null };
     const c = loadCached();
     if (!c) { if (active) out.state = 'unverified'; return out; } // first start: nothing is allowed until the server has answered
     if (c.invalid) { out.state = 'stale'; return out; }
@@ -94,6 +94,13 @@ function createPolicy({ store, config, appVersion, onChange }) {
     out.message = p.message || null;
     out.notice = (typeof p.notice === 'string' && p.notice) ? p.notice.slice(0, 500) : null; // admin notice for the clinic (e.g. maintenance)
     out.expiresAt = p.expiresAt || null;
+    // Help contact of the clinic (numbers only: they are used for a call / WhatsApp link)
+    const sp = p.support;
+    if (sp && typeof sp === 'object') {
+      const ok = (v) => (typeof v === 'string' && /^[0-9+ ()-]{3,30}$/.test(v)) ? v : null;
+      const phone = ok(sp.phone), whatsapp = ok(sp.whatsapp);
+      if (phone || whatsapp) out.support = { phone, whatsapp };
+    }
     // The signed answer may announce a newer build the admin has uploaded. Checked here as well, so a cached answer stops showing it once updated.
     const u = p.update;
     if (u && typeof u.version === 'string' && typeof u.url === 'string' && /^https?:\/\//i.test(u.url) && versionNewer(u.version, appVersion)) {
@@ -125,6 +132,8 @@ function createPolicy({ store, config, appVersion, onChange }) {
   async function check() {
     if (!active) return evaluate();
     const nonce = crypto.randomBytes(16).toString('hex');
+    // Problems the app hit since the last check-in (short technical messages; see queueError in main.js). At most 3 per check-in.
+    const pending = (store.get('pendingErrors', []) || []).filter((e) => e && typeof e.m === 'string').slice(0, 3);
     try {
       const res = await net.fetch(config.policyUrl, {
         method: 'POST',
@@ -133,7 +142,8 @@ function createPolicy({ store, config, appVersion, onChange }) {
           installId, nonce, appVersion,
           platform: process.platform, arch: process.arch,
           device: os.hostname(),
-          osRelease: os.release()
+          osRelease: os.release(),
+          ...(pending.length ? { errors: pending } : {})
         }),
         signal: AbortSignal.timeout(10000)
       });
@@ -144,6 +154,7 @@ function createPolicy({ store, config, appVersion, onChange }) {
       lastSeen = Math.max(lastSeen, Number(p.serverTime) || 0, Date.now());
       store.set('policy', { env: { payload: env.payload, sig: env.sig } });
       store.set('verifiedOnce', true);
+      if (pending.length) store.set('pendingErrors', (store.get('pendingErrors', []) || []).slice(pending.length)); // delivered
       persist(true);
       lastError = null;
     } catch (e) {

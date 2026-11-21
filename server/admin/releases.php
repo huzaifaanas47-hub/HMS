@@ -72,6 +72,7 @@ function resumable(string $act, string $dir): void {
         db()->prepare('INSERT INTO releases (platform, version, stored, filename, size, sha256, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
             ->execute([$platform, $version, $stored, $name, $total, $sha, clip($_POST['notes'] ?? '', 500) ?: null, gmdate('Y-m-d H:i:s')]);
     } catch (Throwable $e) { @unlink($dir . '/' . $stored); jerr(500, 'Could not record the file in the database.'); }
+    log_activity('Download uploaded', $name . ' (' . $platform . ' ' . $version . ')');
     flash('Uploaded ' . $name . '. It is now the download for ' . HMS_PLATFORMS[$platform]['label'] . '.');
     jok(['done' => true]);
 }
@@ -93,6 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($r = $st->fetch()) {
             @unlink($dir . '/' . basename($r['stored']));
             db()->prepare('DELETE FROM releases WHERE id = ?')->execute([$r['id']]);
+            log_activity('Download deleted', $r['filename'] . ' (' . $r['platform'] . ' ' . $r['version'] . ')');
             flash('Removed ' . $r['filename'] . '.');
         }
         finish();

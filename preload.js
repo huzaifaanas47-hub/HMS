@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('api', {
   tabMenu: (tabId) => ipcRenderer.send('tab-menu', tabId),
   recheckPolicy: () => ipcRenderer.send('recheck-policy'),
   openUpdate: () => ipcRenderer.send('open-update'),
+  openHelp: () => ipcRenderer.send('open-help'),
   enroll: (code) => ipcRenderer.invoke('enroll', code),
   onLoadTabs: (cb) => ipcRenderer.on('load-tabs', (e, tabs) => cb(tabs)),
   onActiveTab: (cb) => ipcRenderer.on('active-tab', (e, tabId) => cb(tabId)),

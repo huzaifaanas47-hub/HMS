@@ -1,7 +1,7 @@
 {
   "name": "hms",
   "productName": "HMS",
-  "version": "3.0.5",
+  "version": "3.1.0",
   "description": "HMS - desktop client for the Hospital Management System",
   "main": "main.js",
   "author": {

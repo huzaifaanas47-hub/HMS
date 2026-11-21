@@ -15,6 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         try {
             db()->prepare('INSERT INTO clinics (name, url, expires_at, created_at) VALUES (?, ?, ?, ?)')
                 ->execute([$name, $url === '' ? null : $url, $exp, gmdate('Y-m-d H:i:s')]);
+            log_activity('Clinic created', $name);
             flash('Clinic created. Now add its PCs on the clinic page.');
             redirect('clinic.php?id=' . (int)db()->lastInsertId());
         } catch (PDOException $e) {

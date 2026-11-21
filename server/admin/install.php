@@ -15,6 +15,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $pdo = db();
     if ($act === 'delete') {
         $pdo->prepare('DELETE FROM installs WHERE id = ?')->execute([$id]);
+        $pdo->prepare('DELETE FROM error_reports WHERE install_id = ?')->execute([$inst['install_id']]);
+        log_activity('Device deleted', ($inst['name'] ?: ($inst['device'] ?: 'PC')) . ' #' . $id);
         flash('Install removed. If the app is still installed it will register again on its next check-in.');
         redirect('index.php');
     }
@@ -24,19 +26,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($cur === null) flash('This install has no end date of its own, so there is nothing to extend. Set a date in "This PC\'s own expiry" if you want one.', 'err');
         else {
             $pdo->prepare('UPDATE installs SET expires_at = ? WHERE id = ?')->execute([gmdate('Y-m-d H:i:s', max(time(), $cur) + $days * 86400), $id]);
+            log_activity('Device extended', ($inst['name'] ?: ($inst['device'] ?: 'PC')) . ' #' . $id . ': +' . $days . ' days');
             flash("Access extended by $days days.");
         }
     } elseif ($act === 'expire_now') {
         $pdo->prepare('UPDATE installs SET expires_at = ? WHERE id = ?')->execute([gmdate('Y-m-d H:i:s', time() - 1), $id]);
+        log_activity('Device expired now', ($inst['name'] ?: ($inst['device'] ?: 'PC')) . ' #' . $id);
         flash('Access ended. The app locks at its next check-in (within ~10 minutes).');
     } elseif ($act === 'lock') {
         $pdo->prepare("UPDATE installs SET status = 'blocked' WHERE id = ?")->execute([$id]);
+        log_activity('Device locked', ($inst['name'] ?: ($inst['device'] ?: 'PC')) . ' #' . $id);
         flash('Device locked. The app locks at its next check-in (within ~10 minutes, or when it next starts with internet).');
     } elseif ($act === 'unlock') {
         $pdo->prepare("UPDATE installs SET status = 'active' WHERE id = ?")->execute([$id]);
+        log_activity('Device unlocked', ($inst['name'] ?: ($inst['device'] ?: 'PC')) . ' #' . $id);
         flash('Device unlocked. It works again at its next check-in.');
     } elseif ($act === 'no_expiry') {
         $pdo->prepare('UPDATE installs SET expires_at = NULL WHERE id = ?')->execute([$id]);
+        log_activity('Device expiry removed', ($inst['name'] ?: ($inst['device'] ?: 'PC')) . ' #' . $id);
         flash('Expiry removed for this install.');
     } else {
         $url = normalize_url($_POST['url_override'] ?? '');
@@ -59,12 +66,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]);
         // The old access code only belongs to a device while the device stays in that code's clinic; otherwise the code's date and place no longer apply.
         $pdo->prepare('UPDATE installs SET code_id = NULL WHERE id = ? AND code_id IS NOT NULL AND code_id NOT IN (SELECT id FROM enroll_codes WHERE clinic_id = ?)')->execute([$id, $newClinic]);
+        log_activity('Device saved', ($inst['name'] ?: ($inst['device'] ?: 'PC')) . ' #' . $id . ($joined ? ': moved to clinic #' . $newClinic : '') . (($_POST['status'] ?? '') === 'blocked' ? ', blocked' : ''));
         flash(($joined ? 'Moved into the clinic; its expiry and URL now apply. ' : '') . 'Saved. The app picks this up at its next check-in (within ~10 minutes, or on restart).');
     }
     redirect('install.php?id=' . $id);
 }
 
 $gl = [$inst]; geo_fill($gl); $inst = $gl[0];
+$errs = db()->prepare('SELECT at, app_version, platform, message FROM error_reports WHERE install_id = ? ORDER BY id DESC LIMIT 15');
+$errs->execute([$inst['install_id']]);
+$errs = $errs->fetchAll();
 page_header('Manage install', 'index.php');
 $e = effective_expiry($inst);
 ?>
@@ -106,5 +117,10 @@ $e = effective_expiry($inst);
     <button class="btn alt" name="action" value="no_expiry">Remove expiry</button>
     <button class="btn red" name="action" value="expire_now" data-confirm="Lock this install now?">Expire now</button>
     <button class="btn red" name="action" value="delete" data-confirm="Remove this install record?">Delete record</button></form>
+</div>
+<div class="box"><h2>Error reports from this device</h2>
+  <?php if (!$errs): ?><p class="muted">None. When the app hits a problem it sends a short report with its next check-in and it shows here.</p><?php else: ?>
+  <table><tr><th>When</th><th>Version</th><th>What happened</th></tr>
+  <?php foreach ($errs as $er): ?><tr><td><?= h(fmt_local($er['at'])) ?><br><span class="muted"><?= h(ago($er['at'])) ?></span></td><td class="mono"><?= h($er['app_version'] ?: '-') ?></td><td style="white-space:pre-wrap;word-break:break-word"><?= h($er['message']) ?></td></tr><?php endforeach; ?></table><?php endif; ?>
 </div>
 <?php page_footer();

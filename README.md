@@ -209,3 +209,17 @@ The first version with the updater must still be installed by hand once; every r
 * **Updating does not ask for the code again** (same install ID). Uninstalling and reinstalling creates a new install ID: if the code is full, the new install takes over the place of a record with the same device name and platform that has been silent for over an hour.
 * **Settings, remove devices not seen for N days** frees the places of uninstalled apps automatically (0 = off).
 * Moving a device to another clinic detaches the old access code; "+days" on a code or device with no end date does nothing (set a date with Edit).
+
+## What the site can use inside the app (3.1.0)
+
+* **Permissions:** camera, microphone, location, clipboard, notifications (desktop), files (File System Access API), and on desktop also USB / serial / HID devices such as receipt printers and scanners (a chooser asks which device). Only the configured HMS site origins get these; any other site is refused.
+* **Android:** the first start asks for camera, microphone, location, notifications and storage / media access. Files the site generates (PDF, Excel, images, `blob:` or `data:` downloads) are saved to **Downloads** (no permission needed on Android 10+), and a saved PDF opens at once. `window.print()`, the menu entry *Print / Save as PDF* and the *Print / Save PDF* button of report windows open Android's print screen (any printer the phone knows, or Save as PDF). Pages the site opens in a new window (`window.open`, `target=_blank`) show in a full-screen window with *Print* and *Close*.
+* **Desktop:** right-click menu with Copy, Paste, Print... and *Save page as PDF...*; File menu and `Ctrl+P` print the current tab. Downloads show the usual "save as" box and a notification when done.
+* **Not possible inside a WebView / Electron:** Bluetooth printers and web push messages; use Android's print service or a USB / network printer instead.
+
+## Help button, error reports, activity log (admin panel)
+
+* **Help:** set a phone and WhatsApp number per clinic (Clinics > clinic) or globally (Settings). Apps show a *Help* button (Android menu, desktop top bar) with Call / WhatsApp.
+* **Error reports:** apps note their own problems (crashes, page engine stopped, failed downloads, page load failures) and send up to 3 short notes with the next check-in. They show on the device page. No page content or typed data is sent. Old reports are removed after 60 days.
+* **Activity:** admin changes (codes, devices, clinics, notices, uploads, settings) are logged with who and when, under *Activity*.
+* Upgrading the server files runs the database change by itself (schema v8). Copy `server/` (all files) over the old ones, but keep `lib/config.php` and `lib/releases/`.

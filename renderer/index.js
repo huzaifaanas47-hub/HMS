@@ -4,6 +4,7 @@ const $ = (id) => document.getElementById(id);
 const tabsEl = $('tabs');
 const expiryEl = $('expiry');
 const updateBtn = $('update-btn');
+const helpBtn = $('help-btn');
 const siteChip = $('site-chip');
 const siteHost = $('site-host');
 const progressEl = $('progress');
@@ -147,6 +148,8 @@ window.api.onPolicyState((s) => {
     updateBtn.classList.add('hidden');
   }
 
+  helpBtn.classList.toggle('hidden', !!locked || !s.hasHelp);
+
   const days = s.daysLeft;
   if (!locked && typeof days === 'number' && days <= 7) {
     expiryEl.classList.remove('hidden');
@@ -157,6 +160,7 @@ window.api.onPolicyState((s) => {
 });
 
 updateBtn.addEventListener('click', () => window.api.openUpdate());
+helpBtn.addEventListener('click', () => window.api.openHelp());
 $('settings-btn').addEventListener('click', () => window.api.openSetup());
 $('add-btn').addEventListener('click', () => window.api.openSetup());
 $('reload-btn').addEventListener('click', () => { if (activeId && !locked) window.api.reloadTab(activeId); });

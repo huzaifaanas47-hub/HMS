@@ -12,25 +12,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $act = (string)($_POST['action'] ?? 'save');
     $pdo = db();
     if ($act === 'delete') {
-        $pdo->prepare('UPDATE installs SET clinic_id = NULL WHERE clinic_id = ?')->execute([$id]);
+        $pdo->prepare('UPDATE installs SET clinic_id = NULL, code_id = NULL WHERE clinic_id = ?')->execute([$id]);
+        $pdo->prepare('DELETE FROM enroll_codes WHERE clinic_id = ?')->execute([$id]);
         $pdo->prepare('DELETE FROM clinics WHERE id = ?')->execute([$id]);
+        log_activity('Clinic deleted', $c['name']);
         flash('Clinic deleted. Its PCs are now unassigned and use the global settings.');
         redirect('clinics.php');
     }
     if ($act === 'extend') {
         $days = max(1, min(3650, (int)($_POST['days'] ?? 30)));
-        $from = max(time(), utc_ts($c['expires_at']) ?? 0);
-        $pdo->prepare('UPDATE clinics SET expires_at = ? WHERE id = ?')->execute([gmdate('Y-m-d H:i:s', $from + $days * 86400), $id]);
+        $cur = utc_ts($c['expires_at']);
+        if ($cur === null) { flash('This clinic has no end date, so there is nothing to extend. Set a date under "Access expires" if you want one.', 'err'); redirect('clinic.php?id=' . $id); }
+        $pdo->prepare('UPDATE clinics SET expires_at = ? WHERE id = ?')->execute([gmdate('Y-m-d H:i:s', max(time(), $cur) + $days * 86400), $id]);
+        log_activity('Clinic extended', $c['name'] . ': +' . $days . ' days');
         flash("Every PC in this clinic extended by $days days (PCs with their own earlier date are not affected: see \"Own settings\").");
     } elseif ($act === 'expire_now') {
         $pdo->prepare('UPDATE clinics SET expires_at = ? WHERE id = ?')->execute([gmdate('Y-m-d H:i:s', time() - 1), $id]);
+        log_activity('Clinic expired now', $c['name']);
         flash('Clinic access ended. Its PCs lock at their next check-in (within ~10 minutes).');
     } elseif ($act === 'no_expiry') {
         $pdo->prepare('UPDATE clinics SET expires_at = NULL WHERE id = ?')->execute([$id]);
+        log_activity('Clinic expiry removed', $c['name']);
         flash('Expiry removed for this clinic.');
     } elseif ($act === 'clear_overrides') {
         $n = $pdo->prepare('UPDATE installs SET expires_at = NULL, url_override = NULL WHERE clinic_id = ?');
         $n->execute([$id]);
+        log_activity('PC settings cleared', $c['name'] . ': every PC now follows the clinic');
         flash('Removed the individual expiry and URL of every PC here. They now follow the clinic.');
     } elseif ($act === 'add') {
         $ids = array_values(array_filter(array_map('intval', (array)($_POST['pc'] ?? []))));
@@ -39,11 +46,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $in = implode(',', array_fill(0, count($ids), '?'));
             $st = $pdo->prepare("UPDATE installs SET clinic_id = ?, expires_at = NULL, url_override = NULL WHERE id IN ($in)");
             $st->execute(array_merge([$id], $ids));
+            $pdo->prepare("UPDATE installs SET code_id = NULL WHERE id IN ($in) AND code_id IS NOT NULL AND code_id NOT IN (SELECT id FROM enroll_codes WHERE clinic_id = ?)")->execute(array_merge($ids, [$id])); // a device keeps an access code only while it stays in that code's clinic
+            log_activity('PCs added to clinic', $c['name'] . ': ' . count($ids) . ' PC(s)');
             flash(count($ids) . ' PC(s) added. Their own expiry/URL was cleared so the clinic settings apply.');
         }
     } elseif ($act === 'remove') {
         $pc = (int)($_POST['pc'] ?? 0);
-        $pdo->prepare('UPDATE installs SET clinic_id = NULL WHERE id = ? AND clinic_id = ?')->execute([$pc, $id]);
+        $pdo->prepare('UPDATE installs SET clinic_id = NULL, code_id = NULL WHERE id = ? AND clinic_id = ?')->execute([$pc, $id]);
+        log_activity('PC removed from clinic', $c['name'] . ': PC #' . $pc);
         flash('PC removed from the clinic.');
     } else {
         $name = clip($_POST['name'] ?? '', 120);
@@ -53,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($url === null) { flash('That site URL is not valid.', 'err'); redirect('clinic.php?id=' . $id); }
         if (trim((string)($_POST['expires_at'] ?? '')) !== '' && $exp === null) { flash('That expiry date is not valid.', 'err'); redirect('clinic.php?id=' . $id); }
         try {
-            $pdo->prepare('UPDATE clinics SET name = ?, status = ?, expires_at = ?, url = ?, message = ?, notice = ?, notes = ? WHERE id = ?')->execute([
+            $pdo->prepare('UPDATE clinics SET name = ?, status = ?, expires_at = ?, url = ?, message = ?, notice = ?, notes = ?, support_phone = ?, support_whatsapp = ? WHERE id = ?')->execute([
                 $name,
                 ($_POST['status'] ?? '') === 'blocked' ? 'blocked' : 'active',
                 $exp,
@@ -61,8 +71,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 clip($_POST['message'] ?? '', 500) ?: null,
                 clip($_POST['notice'] ?? '', 500) ?: null,
                 utf8_cut((string)($_POST['notes'] ?? ''), 2000) ?: null,
+                support_clean($_POST['support_phone'] ?? '') ?: null,
+                support_clean($_POST['support_whatsapp'] ?? '') ?: null,
                 $id,
             ]);
+            $newNotice = clip($_POST['notice'] ?? '', 500);
+            log_activity($newNotice !== (string)($c['notice'] ?? '') ? ($newNotice === '' ? 'Notice cleared' : 'Notice sent') : 'Clinic saved', $name . ($newNotice !== '' && $newNotice !== (string)($c['notice'] ?? '') ? ': ' . $newNotice : ''));
             flash('Saved. All PCs in this clinic pick it up at their next check-in (within ~10 minutes, or on restart).');
         } catch (PDOException $e) {
             flash('Another clinic already has that name.', 'err');
@@ -94,6 +108,10 @@ page_header('Clinic: ' . $c['name'], 'clinics.php');
   </div>
   <label>Message shown on the lock screen</label><input type="text" name="message" value="<?= h($c['message']) ?>" maxlength="500">
   <label>Notice to all devices of this clinic (shown inside the app, e.g. &quot;Server maintenance tonight 10 pm&quot;). Empty = no notice. Clear it when the work is done.</label><input type="text" name="notice" value="<?= h($c['notice'] ?? '') ?>" maxlength="500">
+  <div class="grid">
+    <div><label>Help phone number (the Help button in the app calls it) - empty = global number</label><input type="text" name="support_phone" value="<?= h($c['support_phone'] ?? '') ?>" maxlength="30" placeholder="+92 300 1234567"></div>
+    <div><label>Help WhatsApp number (with country code) - empty = global number</label><input type="text" name="support_whatsapp" value="<?= h($c['support_whatsapp'] ?? '') ?>" maxlength="30" placeholder="+92 300 1234567"></div>
+  </div>
   <label>Private notes</label><textarea name="notes"><?= h($c['notes']) ?></textarea>
   <div class="row"><button class="btn">Save clinic</button></div>
 </form>

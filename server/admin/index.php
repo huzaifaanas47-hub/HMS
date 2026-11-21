@@ -16,6 +16,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         else {
             $new = $st0 === 'blocked' ? 'active' : 'blocked';
             db()->prepare('UPDATE installs SET status = ? WHERE id = ?')->execute([$new, $lid]);
+            log_activity($new === 'blocked' ? 'Device locked' : 'Device unlocked', 'PC #' . $lid);
             flash($new === 'blocked' ? 'Device locked. The app locks at its next check-in (within ~10 minutes, or when it next starts with internet).' : 'Device unlocked. It works again at its next check-in.');
         }
         redirect($back);
@@ -26,6 +27,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         else {
             $bin = implode(',', array_fill(0, count($bids), '?'));
             db()->prepare("UPDATE installs SET status = ? WHERE id IN ($bin)")->execute(array_merge([$bulk === 'lock' ? 'blocked' : 'active'], $bids));
+            log_activity($bulk === 'lock' ? 'Devices locked' : 'Devices unlocked', count($bids) . ' device(s)');
             flash(count($bids) . ' device(s) ' . ($bulk === 'lock' ? 'locked' : 'unlocked') . '.');
         }
         redirect($back);
@@ -38,6 +40,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $in = implode(',', array_fill(0, count($ids), '?'));
         if ($cid) { db()->prepare("UPDATE installs SET clinic_id = ?, expires_at = NULL, url_override = NULL WHERE id IN ($in)")->execute(array_merge([$cid], $ids)); flash(count($ids) . ' PC(s) moved into ' . clinic_get($cid)['name'] . '. The clinic expiry and URL now apply to them.'); }
         else { db()->prepare("UPDATE installs SET clinic_id = NULL WHERE id IN ($in)")->execute($ids); flash(count($ids) . ' PC(s) removed from their clinic.'); }
+        log_activity($cid ? 'PCs moved to clinic' : 'PCs removed from clinic', count($ids) . ' PC(s)' . ($cid ? ' to ' . clinic_get($cid)['name'] : ''));
         // A device keeps its access code only while it stays in that code's clinic; moved devices stop counting on, and following the dates of, their old code.
         db()->prepare("UPDATE installs SET code_id = NULL WHERE id IN ($in) AND code_id IS NOT NULL AND code_id NOT IN (SELECT id FROM enroll_codes WHERE clinic_id = ?)")->execute(array_merge($ids, [$cid]));
     }
@@ -109,7 +112,7 @@ page_header('Devices', 'index.php');
 <form method="get" class="row" style="margin:0 0 12px"><input type="text" name="q" value="<?= h($q) ?>" placeholder="Search name, device, install ID or IP" style="max-width:340px">
   <select name="clinic" style="max-width:220px"><option value="">All clinics</option><option value="0"<?= $fc === 0 ? ' selected' : '' ?>>Not in a clinic</option><?php foreach (clinics_all() as $cl): ?><option value="<?= (int)$cl['id'] ?>"<?= $fc === (int)$cl['id'] ? ' selected' : '' ?>><?= h($cl['name']) ?></option><?php endforeach; ?></select>
   <button class="btn alt">Filter</button></form>
-<form method="post" action="index.php<?= $_SERVER['QUERY_STRING'] !== '' ? '?' . h($_SERVER['QUERY_STRING']) : '' ?>"><?= csrf_field() ?>
+<form method="post" action="index.php<?= ($_SERVER['QUERY_STRING'] ?? '') !== '' ? '?' . h($_SERVER['QUERY_STRING']) : '' ?>"><?= csrf_field() ?>
 <table class="dev">
 <tr class="hd"><th style="width:26px"></th><th>PC</th><th>Clinic</th><th>System</th><th>Last seen</th><th>Access until</th><th>Site URL pushed</th><th></th></tr>
 <?php foreach ($rows as $r):

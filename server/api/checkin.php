@@ -9,7 +9,7 @@ header('Cache-Control: no-store');
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') { http_response_code(405); exit('{"error":"method not allowed"}'); }
 
-$in = json_decode((string)file_get_contents('php://input', false, null, 0, 4096), true);
+$in = json_decode((string)file_get_contents('php://input', false, null, 0, 16384), true);
 $installId = is_array($in) && is_string($in['installId'] ?? null) ? strtolower($in['installId']) : '';
 $nonce = is_array($in) && is_string($in['nonce'] ?? null) ? $in['nonce'] : '';
 if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $installId) || !preg_match('/^[0-9a-f]{16,64}$/', $nonce)) {
@@ -43,6 +43,7 @@ $pdo->prepare('UPDATE installs SET device = ?, platform = ?, os_release = ?, app
 $q->execute([$installId]);
 $inst = $q->fetch();
 
+store_error_reports($inst, is_array($in) ? ($in['errors'] ?? null) : null);
 cleanup_stale_installs();
 $arch = is_array($in) && is_string($in['arch'] ?? null) ? clip($in['arch'], 12) : '';
 echo json_encode(sign_envelope(build_policy($inst, $nonce, $arch)), JSON_UNESCAPED_SLASHES);

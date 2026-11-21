@@ -34,7 +34,7 @@ function db(): PDO {
 function ensure_schema(PDO $pdo): void {
     try { $v = $pdo->query("SELECT v FROM settings WHERE k = 'schema_version'")->fetchColumn(); }
     catch (Throwable $e) { return; } // not installed yet
-    if ($v === '7') return;
+    if ($v === '8') return;
     $opts = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
     $pdo->exec("CREATE TABLE IF NOT EXISTS clinics (
         id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL UNIQUE, url VARCHAR(2048) NULL,
@@ -63,7 +63,18 @@ function ensure_schema(PDO $pdo): void {
     // v7: approximate location of each device, looked up from its IP address.
     $has = (int)$pdo->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'installs' AND COLUMN_NAME = 'geo'")->fetchColumn();
     if (!$has) $pdo->exec('ALTER TABLE installs ADD COLUMN geo VARCHAR(120) NULL, ADD COLUMN geo_ip VARCHAR(45) NULL');
-    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema_version', '7') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
+    // v8: a Help contact per clinic (phone / WhatsApp), error reports sent by the apps, and an activity log of admin changes.
+    $has = (int)$pdo->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'clinics' AND COLUMN_NAME = 'support_phone'")->fetchColumn();
+    if (!$has) $pdo->exec('ALTER TABLE clinics ADD COLUMN support_phone VARCHAR(30) NULL, ADD COLUMN support_whatsapp VARCHAR(30) NULL');
+    $pdo->exec("CREATE TABLE IF NOT EXISTS error_reports (
+        id INT AUTO_INCREMENT PRIMARY KEY, install_id CHAR(36) NOT NULL, at DATETIME NOT NULL, app_version VARCHAR(20) NULL,
+        platform VARCHAR(20) NULL, message VARCHAR(600) NOT NULL, KEY idx_inst (install_id, id)
+    ) $opts");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS activity_log (
+        id INT AUTO_INCREMENT PRIMARY KEY, at DATETIME NOT NULL, actor VARCHAR(64) NOT NULL, ip VARCHAR(45) NULL,
+        action VARCHAR(60) NOT NULL, detail VARCHAR(600) NULL, KEY idx_at (at)
+    ) $opts");
+    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema_version', '8') ON DUPLICATE KEY UPDATE v = VALUES(v)")->execute();
 }
 
 function h($v): string { return htmlspecialchars((string)$v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
@@ -83,7 +94,7 @@ function clip($v, int $max): string {
 function settings(): array {
     static $s = null;
     if ($s === null) {
-        $s = ['default_url' => '', 'default_expiry_days' => '0', 'global_expires_at' => '', 'global_message' => '', 'offline_grace_days' => '14', 'require_code' => '1', 'stale_delete_days' => '0', 'last_cleanup' => '0'];
+        $s = ['default_url' => '', 'default_expiry_days' => '0', 'global_expires_at' => '', 'global_message' => '', 'offline_grace_days' => '14', 'require_code' => '1', 'stale_delete_days' => '0', 'last_cleanup' => '0', 'support_phone' => '', 'support_whatsapp' => ''];
         foreach (db()->query('SELECT k, v FROM settings') as $r) $s[$r['k']] = (string)$r['v'];
     }
     return $s;
@@ -226,10 +237,60 @@ function update_info(array $inst, string $arch = ''): ?array {
    app can never tell the server, so this is how its slot comes back). Off when the setting is 0. Runs at most once an hour. */
 function cleanup_stale_installs(): void {
     $s = settings();
-    $days = (int)($s['stale_delete_days'] ?? 0);
-    if ($days < 1 || time() - (int)($s['last_cleanup'] ?? 0) < 3600) return;
+    if (time() - (int)($s['last_cleanup'] ?? 0) < 3600) return;
     setting_set('last_cleanup', (string)time());
-    db()->prepare('DELETE FROM installs WHERE last_seen IS NOT NULL AND last_seen < ?')->execute([gmdate('Y-m-d H:i:s', time() - $days * 86400)]);
+    $days = (int)($s['stale_delete_days'] ?? 0);
+    if ($days >= 1) {
+        $del = db()->prepare('DELETE FROM installs WHERE last_seen IS NOT NULL AND last_seen < ?');
+        $del->execute([gmdate('Y-m-d H:i:s', time() - $days * 86400)]);
+        if ($del->rowCount() > 0) log_activity('Devices removed', $del->rowCount() . ' device(s) not seen for ' . $days . ' days were removed automatically.');
+    }
+    db()->prepare('DELETE FROM error_reports WHERE at < ? OR install_id NOT IN (SELECT install_id FROM installs)')->execute([gmdate('Y-m-d H:i:s', time() - 60 * 86400)]);
+}
+
+/* Who changed what and when, shown on the Activity page. Never lets a logging problem break the action itself. */
+function log_activity(string $action, string $detail = ''): void {
+    try {
+        static $names = [];
+        $actor = 'system';
+        if (!empty($_SESSION['admin_id'])) {
+            $aid = (int)$_SESSION['admin_id'];
+            if (!isset($names[$aid])) { $q = db()->prepare('SELECT username FROM admins WHERE id = ?'); $q->execute([$aid]); $names[$aid] = (string)$q->fetchColumn(); }
+            $actor = $names[$aid] !== '' ? $names[$aid] : 'admin #' . $aid;
+        }
+        db()->prepare('INSERT INTO activity_log (at, actor, ip, action, detail) VALUES (?, ?, ?, ?, ?)')
+            ->execute([gmdate('Y-m-d H:i:s'), clip($actor, 64), clip($_SERVER['REMOTE_ADDR'] ?? '', 45) ?: null, clip($action, 60), clip($detail, 600) ?: null]);
+        if (mt_rand(1, 50) === 1) db()->prepare('DELETE FROM activity_log WHERE at < ?')->execute([gmdate('Y-m-d H:i:s', time() - 400 * 86400)]);
+    } catch (Throwable $e) { /* logging is best effort */ }
+}
+
+/* Error reports sent by the apps with their check-in (at most 3 per check-in, newest 50 kept per device). */
+function store_error_reports(array $inst, $errors): void {
+    if (!is_array($errors)) return;
+    try {
+        $pdo = db();
+        $n = 0;
+        foreach ($errors as $e) {
+            if ($n >= 3 || !is_array($e)) continue;
+            $m = clip($e['m'] ?? '', 600);
+            if ($m === '') continue;
+            $t = isset($e['t']) && is_numeric($e['t']) ? (int)((float)$e['t'] / 1000) : time();
+            if ($t > time() || $t < time() - 90 * 86400) $t = time();
+            $pdo->prepare('INSERT INTO error_reports (install_id, at, app_version, platform, message) VALUES (?, ?, ?, ?, ?)')
+                ->execute([$inst['install_id'], gmdate('Y-m-d H:i:s', $t), clip($inst['app_version'] ?? '', 20) ?: null, clip($inst['platform'] ?? '', 20) ?: null, $m]);
+            $n++;
+        }
+        if ($n) $pdo->prepare('DELETE FROM error_reports WHERE install_id = ? AND id NOT IN (SELECT id FROM (SELECT id FROM error_reports WHERE install_id = ? ORDER BY id DESC LIMIT 50) keep)')->execute([$inst['install_id'], $inst['install_id']]);
+    } catch (Throwable $e) { /* never fail a check-in because of a report */ }
+}
+
+/* Help contact: the clinic's own numbers, else the global ones. Digits, + and spaces only. */
+function support_clean($v): string { return is_string($v) ? clip(preg_replace('/[^0-9+ ()-]/', '', $v) ?? '', 30) : ''; }
+function support_info(?array $cl): ?array {
+    $s = settings();
+    $phone = support_clean($cl['support_phone'] ?? '') ?: support_clean($s['support_phone'] ?? '');
+    $wa = support_clean($cl['support_whatsapp'] ?? '') ?: support_clean($s['support_whatsapp'] ?? '');
+    return ($phone !== '' || $wa !== '') ? ['phone' => $phone !== '' ? $phone : null, 'whatsapp' => $wa !== '' ? $wa : null] : null;
 }
 
 function build_policy(array $inst, string $nonce, string $arch = ''): array {
@@ -249,6 +310,7 @@ function build_policy(array $inst, string $nonce, string $arch = ''): array {
         'offlineGraceDays' => (int)$s['offline_grace_days'],
         'update' => update_info($inst, $arch),
         'notice' => !empty($cl['notice']) ? (string)$cl['notice'] : null, // shown inside the app (not a lock screen)
+        'support' => support_info($cl),
         'serverTime' => time() * 1000,
     ];
 }
@@ -391,7 +453,7 @@ function geo_fill(array &$rows, int $max = 6): void {
 }
 
 function page_header(string $title, string $active = ''): void {
-    $nav = ['clinics.php' => 'Clinics', 'index.php' => 'Devices', 'codes.php' => 'Codes', 'releases.php' => 'Downloads', 'versions.php' => 'Versions', 'settings.php' => 'Settings'];
+    $nav = ['clinics.php' => 'Clinics', 'index.php' => 'Devices', 'codes.php' => 'Codes', 'releases.php' => 'Downloads', 'versions.php' => 'Versions', 'activity.php' => 'Activity', 'settings.php' => 'Settings'];
     echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
         . '<title>' . h($title) . ' - HMS Admin</title><style>
 *{box-sizing:border-box}body{margin:0;font:14px/1.5 Segoe UI,-apple-system,BlinkMacSystemFont,Inter,Roboto,Arial,sans-serif;background:#f1f4f9;color:#18202f;-webkit-font-smoothing:antialiased}
