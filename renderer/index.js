@@ -2,6 +2,7 @@
 
 const $ = (id) => document.getElementById(id);
 const tabsEl = $('tabs');
+const tabsWrap = $('tabs-wrap');
 const expiryEl = $('expiry');
 const updateBtn = $('update-btn');
 const helpBtn = $('help-btn');
@@ -25,6 +26,13 @@ const LEVEL_TEXT = {
   local: (h) => ({ text: h + ' · local', title: 'Local network address, not encrypted: ' + h }),
   insecure: (h) => ({ text: 'Not secure · ' + h, title: 'This page is not encrypted (HTTP). Do not enter passwords or patient data.' })
 };
+
+// Show the edge arrows only when tabs are hidden on that side.
+function updateOverflow() {
+  const max = tabsEl.scrollWidth - tabsEl.clientWidth;
+  tabsWrap.classList.toggle('can-prev', tabsEl.scrollLeft > 2);
+  tabsWrap.classList.toggle('can-next', max - tabsEl.scrollLeft > 2);
+}
 
 function tabButtons() { return [...tabsEl.querySelectorAll('.tab')]; }
 
@@ -56,6 +64,7 @@ function paint() {
   needsTab.forEach((b) => { b.disabled = locked || !activeId; });
   const cur = tabsEl.querySelector('.tab[aria-selected="true"]');
   if (cur) cur.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  updateOverflow();
   paintInfo();
 }
 
@@ -94,7 +103,18 @@ function render(tabs) {
 
   if (!ids.has(activeId)) activeId = tabs[0] ? tabs[0].id : null;
   paint();
+  updateOverflow();
 }
+
+tabsEl.addEventListener('scroll', updateOverflow, { passive: true });
+window.addEventListener('resize', updateOverflow);
+if (window.ResizeObserver) new ResizeObserver(updateOverflow).observe(tabsEl);
+// Mouse wheel scrolls the strip sideways; the arrows scroll by about half its width.
+tabsEl.addEventListener('wheel', (e) => {
+  if (e.deltaY && !e.deltaX) { e.preventDefault(); tabsEl.scrollLeft += e.deltaY; }
+}, { passive: false });
+$('tabs-prev').addEventListener('click', () => tabsEl.scrollBy({ left: -Math.max(160, tabsEl.clientWidth / 2) }));
+$('tabs-next').addEventListener('click', () => tabsEl.scrollBy({ left: Math.max(160, tabsEl.clientWidth / 2) }));
 
 // Arrow keys / Home / End move between tabs (roving tabindex).
 tabsEl.addEventListener('keydown', (e) => {
